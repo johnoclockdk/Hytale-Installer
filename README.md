@@ -15,7 +15,7 @@ Read more about [Hytale](https://hytale.com/) here. This script is not associate
 
 ## Help and support
 
-For help and support regarding this script, join the [Discord Chat](https://discord.gg/hytale).
+For help and support, join the [Discord Chat](https://discord.gg/hytale).
 
 ## Supported installations
 

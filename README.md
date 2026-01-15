@@ -44,8 +44,6 @@ To test the script, use a fresh VM or container with your preferred supported OS
 
 ## Contributors ✨
 
-- Created and maintained by the Hytale Installer community
-
 ---
 
 This project is not affiliated with or endorsed by Hypixel Studios or the official Hytale project. All trademarks and copyrights belong to their respective owners.

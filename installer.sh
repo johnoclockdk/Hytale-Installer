@@ -341,6 +341,37 @@ cat << EOF > "$SERVER_DIR/start.sh"
 #!/bin/bash
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 cd "\$SCRIPT_DIR"
+LOGS_DIR="\$SCRIPT_DIR/logs"
+
+# Monitor auth status in background
+monitor_auth() {
+  # Wait for logs directory to be created
+  while [ ! -d "\$LOGS_DIR" ]; do
+    sleep 1
+  done
+  
+  # Monitor the latest log file for successful authentication
+  while true; do
+    # Always get the most recent log file (in case server restarts)
+    LATEST_LOG=\$(ls -t "\$LOGS_DIR"/*.log 2>/dev/null | head -1)
+    if [ -n "\$LATEST_LOG" ]; then
+      # Check for successful auth completion (look for auth success indicators)
+      if grep -qE "Authenticated as|Authentication successful|Auth credential store|Server tokens configured" "\$LATEST_LOG" 2>/dev/null; then
+        # Double-check it's not the initial "No server tokens" message
+        if ! grep -q "No server tokens configured" "\$LATEST_LOG" 2>/dev/null || grep -qE "Authenticated as|Authentication successful" "\$LATEST_LOG" 2>/dev/null; then
+          # Verify auth actually succeeded by checking for credential store after auth command
+          if grep -q "Auth credential store" "\$LATEST_LOG" 2>/dev/null; then
+            touch "\$SCRIPT_DIR/.authenticated"
+            echo "[AUTH] Authentication successful - marked as authenticated"
+            echo "[AUTH] File created: \$SCRIPT_DIR/.authenticated"
+            exit 0
+          fi
+        fi
+      fi
+    fi
+    sleep 3
+  done
+}
 
 # Check if this is the first run (no auth token file exists)
 FIRST_RUN=false
@@ -352,24 +383,38 @@ while true; do
   echo "Starting Hytale Server..."
   
   if [ "\$FIRST_RUN" = true ]; then
-    # First run: auto-authenticate
+    # Start auth monitor in background
+    monitor_auth &
+    MONITOR_PID=\$!
+    
+    # First run: auto-authenticate using expect
     expect << 'EXPECT_EOF'
 set timeout -1
 spawn java -jar HytaleServer.jar --assets Assets.zip
 
-# Wait for "No server tokens configured" message
+# Wait for "No server tokens configured" message and send auth command
 expect {
   "No server tokens configured" {
     send "/auth login device\r"
+    exp_continue
+  }
+  "Visit: https://oauth.accounts.hytale.com" {
     exp_continue
   }
   eof
 }
 EXPECT_EOF
     
-    # Mark as authenticated after first successful run
-    touch "\$SCRIPT_DIR/.authenticated"
-    FIRST_RUN=false
+    # Kill monitor if still running
+    kill \$MONITOR_PID 2>/dev/null || true
+    
+    # Check if authentication was successful
+    if [ -f "\$SCRIPT_DIR/.authenticated" ]; then
+      FIRST_RUN=false
+      echo "[INFO] Server authenticated successfully"
+    else
+      echo "[WARN] Authentication may not be complete. Check logs in \$LOGS_DIR/"
+    fi
   else
     # Subsequent runs: just start the server normally
     java -jar HytaleServer.jar --assets Assets.zip
@@ -445,7 +490,17 @@ echo "Waiting for server to start and generate authentication URL..."
 AUTH_URL=""
 for i in {1..6}; do
   sleep 10
+  # Try to get auth URL from journalctl
   AUTH_URL=$(journalctl -u hytale -n 150 --no-pager -o cat 2>/dev/null | grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' | tail -1)
+  
+  # If not found in journalctl, try the logs folder
+  if [ -z "$AUTH_URL" ] && [ -d "$SERVER_DIR/logs" ]; then
+    LATEST_LOG=$(ls -t "$SERVER_DIR/logs"/*.log 2>/dev/null | head -1)
+    if [ -n "$LATEST_LOG" ]; then
+      AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
+    fi
+  fi
+  
   if [ -n "$AUTH_URL" ]; then
     break
   fi
@@ -464,10 +519,13 @@ else
   echo ""
   echo "Watch the logs for the authentication URL:"
   echo "   journalctl -u hytale -f --no-pager -o cat"
+  echo "   OR"
+  echo "   tail -f $SERVER_DIR/logs/*.log"
   echo ""
 fi
 echo "NEXT STEPS:"
 echo "1) Complete authentication using the URL above (or in logs)"
+echo "   - The .authenticated file will be created automatically after successful auth"
 echo ""
 echo "2) Manage the service:"
 echo "   sudo systemctl status hytale"
@@ -475,10 +533,17 @@ echo "   sudo systemctl restart hytale"
 echo ""
 echo "3) View logs:"
 echo "   journalctl -u hytale -f"
+echo "   OR"
+echo "   tail -f $SERVER_DIR/logs/*.log"
+echo ""
+echo "4) Check authentication status:"
+echo "   ls -la $SERVER_DIR/.authenticated"
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"
 echo "IP Address: $SERVER_IP:$CUSTOM_PORT"
+echo "Server Directory: $SERVER_DIR"
+echo "Logs Directory: $SERVER_DIR/logs"
 echo "Auto-restart: Every 3 days"
 echo "=========================================="
 }

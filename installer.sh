@@ -263,6 +263,10 @@ fi
 chmod +x hytale-downloader-linux-amd64
 rm -f hytale-downloader-windows-amd64.exe hytale-downloader.zip
 
+if [ "$(realpath QUICKSTART.md)" != "$BASE_DIR/QUICKSTART.md" ]; then
+  mv QUICKSTART.md "$BASE_DIR/"
+fi
+
 if [ "$(realpath hytale-downloader-linux-amd64)" != "$BASE_DIR/hytale-downloader-linux-amd64" ]; then
   mv hytale-downloader-linux-amd64 "$BASE_DIR/"
 fi

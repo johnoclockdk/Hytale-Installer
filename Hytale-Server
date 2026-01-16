@@ -4,10 +4,14 @@ set -e
 # ================= CONFIG =================
 USER_NAME=$(whoami)
 BASE_DIR="$(pwd)/hytale_server"
-SERVER_DIR="$BASE_DIR/server"
+TOOLS_DIR="$(pwd)/.hytale-tools"
+TEMP_DIR="$(pwd)/.hytale-temp"
+BACKUP_DIR="$BASE_DIR/backups"
 DOWNLOADER_URL="https://downloader.hytale.com/hytale-downloader.zip"
-SERVICE_FILE="/etc/systemd/system/hytale.service"
-RESTART_CRON="0 0 */3 * * /usr/bin/systemctl restart hytale"
+SERVICE_FILE="/etc/systemd/system/hytale.service" 
+RESTART_CRON="0 0 */3 * * /usr/bin/systemctl restart hytale" # Every 3 days at midnight
+BACKUP_CRON="0 2 * * * $(realpath $0) backup > /dev/null 2>&1" # Daily at 2 AM
+BACKUP_RETENTION=7
 PORT=5520
 # =========================================
 
@@ -43,6 +47,18 @@ uninstall_server() {
     rm -rf "$BASE_DIR"
   fi
   
+  # Remove tools directory
+  if [ -d "$TOOLS_DIR" ]; then
+    echo -e "${BLUE}Removing tools directory...${NC}"
+    rm -rf "$TOOLS_DIR"
+  fi
+  
+  # Remove temp directory
+  if [ -d "$TEMP_DIR" ]; then
+    echo -e "${BLUE}Removing temp directory...${NC}"
+    rm -rf "$TEMP_DIR"
+  fi
+  
   # Remove firewall rule
   if command -v ufw >/dev/null 2>&1; then
     echo -e "${BLUE}Removing firewall rule...${NC}"
@@ -54,7 +70,239 @@ uninstall_server() {
   echo -e "${BOLD}${GREEN}Uninstall complete!${NC}"
   echo -e "${GREEN}==========================================${NC}"
 }
+backup_server() {
+  echo ""
+  echo -e "${BOLD}${YELLOW}=== Creating Hytale Server Backup ===${NC}"
+  echo ""
+  
+  # Check if server is installed
+  if [ ! -d "$BASE_DIR" ]; then
+    echo -e "${RED}ERROR: Server directory not found.${NC}"
+    echo -e "${YELLOW}Please install the server first.${NC}"
+    exit 1
+  fi
+  
+  # Create backup directory if it doesn't exist
+  mkdir -p "$BACKUP_DIR"
+  
+  # Generate backup filename with timestamp
+  BACKUP_NAME="hytale-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+  BACKUP_PATH="$BACKUP_DIR/$BACKUP_NAME"
+  
+  echo -e "${CYAN}[1/3]${NC} Creating backup archive..."
+  echo -e "${BLUE}Backing up world data and configuration files...${NC}"
+  
+  # Build list of files to backup
+  BACKUP_ITEMS=()
+  
+  # Check and add universe folder
+  if [ -d "$BASE_DIR/universe" ]; then
+    BACKUP_ITEMS+=("universe")
+    echo -e "${BLUE}  → universe/${NC}"
+  fi
+  
+  # Check and add JSON files
+  for file in bans.json config.json permissions.json whitelist.json; do
+    if [ -f "$BASE_DIR/$file" ]; then
+      BACKUP_ITEMS+=("$file")
+      echo -e "${BLUE}  → $file${NC}"
+    fi
+  done
+  
+  if [ ${#BACKUP_ITEMS[@]} -eq 0 ]; then
+    echo -e "${RED}No backup items found (universe folder or config files).${NC}"
+    exit 1
+  fi
+  
+  # Create compressed backup
+  if tar -czf "$BACKUP_PATH" -C "$BASE_DIR" "${BACKUP_ITEMS[@]}" 2>/dev/null; then
+    BACKUP_SIZE=$(du -h "$BACKUP_PATH" | cut -f1)
+    echo -e "${GREEN}✓ Backup created: $BACKUP_NAME (${BACKUP_SIZE})${NC}"
+  else
+    echo -e "${RED}Failed to create backup.${NC}" >&2
+    exit 1
+  fi
+  
+  echo -e "${CYAN}[2/3]${NC} Managing backup retention..."
+  # Count backups
+  BACKUP_COUNT=$(ls -1 "$BACKUP_DIR"/hytale-backup-*.tar.gz 2>/dev/null | wc -l)
+  echo -e "${BLUE}Total backups: ${BACKUP_COUNT}${NC}"
+  
+  # Remove old backups if exceeding retention
+  if [ "$BACKUP_COUNT" -gt "$BACKUP_RETENTION" ]; then
+    REMOVE_COUNT=$((BACKUP_COUNT - BACKUP_RETENTION))
+    echo -e "${YELLOW}Removing ${REMOVE_COUNT} old backup(s)...${NC}"
+    ls -1t "$BACKUP_DIR"/hytale-backup-*.tar.gz | tail -n "$REMOVE_COUNT" | xargs rm -f
+    echo -e "${GREEN}✓ Old backups removed (keeping last ${BACKUP_RETENTION})${NC}"
+  else
+    echo -e "${GREEN}✓ Retention policy satisfied (keeping last ${BACKUP_RETENTION})${NC}"
+  fi
+  
+  echo -e "${CYAN}[3/3]${NC} Backup complete!"
+  echo ""
+  echo -e "${GREEN}===========================================${NC}"
+  echo -e "${BOLD}${GREEN}Backup saved to:${NC}"
+  echo -e "${BLUE}$BACKUP_PATH${NC}"
+  echo -e "${GREEN}===========================================${NC}"
+}
 
+restore_server() {
+  echo ""
+  echo -e "${BOLD}${YELLOW}=== Restoring Hytale Server from Backup ===${NC}"
+  echo ""
+  
+  # Check if backup directory exists
+  if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR"/hytale-backup-*.tar.gz 2>/dev/null)" ]; then
+    echo -e "${RED}ERROR: No backups found in $BACKUP_DIR${NC}"
+    echo -e "${YELLOW}Create a backup first using: ./Hytale-Server backup${NC}"
+    exit 1
+  fi
+  
+  # List available backups
+  echo -e "${CYAN}Available backups:${NC}"
+  echo ""
+  
+  BACKUPS=($(ls -1t "$BACKUP_DIR"/hytale-backup-*.tar.gz 2>/dev/null))
+  
+  for i in "${!BACKUPS[@]}"; do
+    BACKUP_FILE="${BACKUPS[$i]}"
+    BACKUP_NAME=$(basename "$BACKUP_FILE")
+    BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+    BACKUP_DATE=$(echo "$BACKUP_NAME" | grep -oP '\d{8}-\d{6}' | sed 's/\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)/\1-\2-\3 \4:\5:\6/')
+    echo -e "  ${BOLD}[$((i+1))]${NC} $BACKUP_DATE (${BACKUP_SIZE})"
+  done
+  
+  echo ""
+  read -p "Select backup to restore (1-${#BACKUPS[@]}) or 'q' to quit: " SELECTION
+  
+  if [ "$SELECTION" = "q" ] || [ "$SELECTION" = "Q" ]; then
+    echo -e "${YELLOW}Restore cancelled.${NC}"
+    exit 0
+  fi
+  
+  # Validate selection
+  if ! [[ "$SELECTION" =~ ^[0-9]+$ ]] || [ "$SELECTION" -lt 1 ] || [ "$SELECTION" -gt "${#BACKUPS[@]}" ]; then
+    echo -e "${RED}Invalid selection.${NC}"
+    exit 1
+  fi
+  
+  SELECTED_BACKUP="${BACKUPS[$((SELECTION-1))]}"
+  SELECTED_NAME=$(basename "$SELECTED_BACKUP")
+  
+  echo ""
+  echo -e "${YELLOW}WARNING: This will replace all current server files!${NC}"
+  read -p "Are you sure you want to restore from $SELECTED_NAME? (yes/no): " CONFIRM
+  
+  if [ "$CONFIRM" != "yes" ]; then
+    echo -e "${YELLOW}Restore cancelled.${NC}"
+    exit 0
+  fi
+  
+  # Stop server if running
+  if systemctl is-active --quiet hytale 2>/dev/null; then
+    echo -e "${CYAN}[1/4]${NC} Stopping Hytale server..."
+    sudo systemctl stop hytale
+    echo -e "${GREEN}✓ Server stopped${NC}"
+  else
+    echo -e "${CYAN}[1/4]${NC} Server not running, proceeding..."
+  fi
+  
+  # Backup current state (just in case)
+  echo -e "${CYAN}[2/4]${NC} Creating safety backup of current state..."
+  SAFETY_BACKUP="$BACKUP_DIR/pre-restore-$(date +%Y%m%d-%H%M%S).tar.gz"
+  
+  # Build safety backup items list
+  SAFETY_ITEMS=()
+  [ -d "$BASE_DIR/universe" ] && SAFETY_ITEMS+=("universe")
+  for file in bans.json config.json permissions.json whitelist.json; do
+    [ -f "$BASE_DIR/$file" ] && SAFETY_ITEMS+=("$file")
+  done
+  
+  if [ ${#SAFETY_ITEMS[@]} -gt 0 ]; then
+    tar -czf "$SAFETY_BACKUP" -C "$BASE_DIR" "${SAFETY_ITEMS[@]}" 2>/dev/null
+    echo -e "${GREEN}✓ Safety backup created${NC}"
+  else
+    echo -e "${YELLOW}⚠ No existing data to backup${NC}"
+  fi
+  
+  # Remove current world data and config files
+  echo -e "${CYAN}[3/4]${NC} Removing current world data and config files..."
+  [ -d "$BASE_DIR/universe" ] && rm -rf "$BASE_DIR/universe"
+  for file in bans.json config.json permissions.json whitelist.json; do
+    [ -f "$BASE_DIR/$file" ] && rm -f "$BASE_DIR/$file"
+  done
+  echo -e "${GREEN}✓ Current data removed${NC}"
+  
+  # Extract backup
+  echo -e "${CYAN}[4/4]${NC} Restoring from backup..."
+  if tar -xzf "$SELECTED_BACKUP" -C "$BASE_DIR" 2>/dev/null; then
+    echo -e "${GREEN}✓ Backup restored successfully${NC}"
+  else
+    echo -e "${RED}Failed to restore backup!${NC}" >&2
+    if [ -f "$SAFETY_BACKUP" ] && [ ${#SAFETY_ITEMS[@]} -gt 0 ]; then
+      echo -e "${YELLOW}Attempting to restore safety backup...${NC}"
+      tar -xzf "$SAFETY_BACKUP" -C "$BASE_DIR" 2>/dev/null
+    fi
+    exit 1
+  fi
+  
+  # Ask to restart server
+  echo ""
+  read -p "Start the server now? (yes/no): " START_NOW
+  
+  if [ "$START_NOW" = "yes" ]; then
+    sudo systemctl start hytale
+    echo -e "${GREEN}Server started.${NC}"
+  fi
+  
+  echo ""
+  echo -e "${GREEN}===========================================${NC}"
+  echo -e "${BOLD}${GREEN}Restore complete!${NC}"
+  echo -e "${BLUE}Restored from: $SELECTED_NAME${NC}"
+  echo -e "${GREEN}===========================================${NC}"
+}
+
+toggle_autobackup() {
+  echo ""
+  echo -e "${BOLD}${YELLOW}=== Auto-Backup Configuration ===${NC}"
+  echo ""
+  
+  # Check if auto-backup cron exists
+  if sudo crontab -l 2>/dev/null | grep -q "Hytale-Server backup"; then
+    echo -e "${YELLOW}Auto-backup is currently: ${BOLD}ENABLED${NC}"
+    echo ""
+    read -p "Do you want to disable auto-backup? (yes/no): " DISABLE
+    
+    if [ "$DISABLE" = "yes" ]; then
+      sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" | sudo crontab -
+      echo -e "${GREEN}✓ Auto-backup disabled${NC}"
+    else
+      echo -e "${YELLOW}Auto-backup remains enabled${NC}"
+    fi
+  else
+    echo -e "${YELLOW}Auto-backup is currently: ${BOLD}DISABLED${NC}"
+    echo ""
+    echo -e "${CYAN}Configure automatic daily backups:${NC}"
+    read -p "Enable auto-backup? (yes/no): " ENABLE
+    
+    if [ "$ENABLE" = "yes" ]; then
+      # Get script absolute path
+      SCRIPT_PATH="$(realpath "$0")"
+      BACKUP_CRON="0 2 * * * $SCRIPT_PATH backup > /dev/null 2>&1"
+      
+      ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON" ) | sudo crontab -
+      
+      echo -e "${GREEN}✓ Auto-backup enabled${NC}"
+      echo -e "${BLUE}Backups will run daily at 2:00 AM${NC}"
+      echo -e "${BLUE}Retention: ${BACKUP_RETENTION} backups${NC}"
+    else
+      echo -e "${YELLOW}Auto-backup remains disabled${NC}"
+    fi
+  fi
+  
+  echo ""
+  echo -e "${GREEN}===========================================${NC}"
+}
 update_server() {
   echo ""
   echo -e "${BOLD}${YELLOW}=== Updating Hytale Server ===${NC}"
@@ -70,20 +318,28 @@ update_server() {
   echo -e "${CYAN}[1/5]${NC} Stopping Hytale service..."
   sudo systemctl stop hytale
   
-  echo -e "${CYAN}[2/5]${NC} Downloading Hytale Downloader..."
-  cd "$BASE_DIR" || { echo -e "${RED}Failed to change to $BASE_DIR.${NC}" >&2; exit 1; }
+  # Create temp directory
+  mkdir -p "$TEMP_DIR"
+  mkdir -p "$TOOLS_DIR"
   
-  if [ ! -f "hytale-downloader-linux-amd64" ]; then
+  echo -e "${CYAN}[2/5]${NC} Downloading Hytale Downloader..."
+  cd "$TEMP_DIR" || { echo -e "${RED}Failed to change to $TEMP_DIR.${NC}" >&2; exit 1; }
+  
+  if [ ! -f "$TOOLS_DIR/hytale-downloader-linux-amd64" ]; then
     if wget --no-cookies --no-cache --show-progress -O hytale-downloader.zip "$DOWNLOADER_URL"; then
       if unzip -q hytale-downloader.zip; then
         chmod +x hytale-downloader-linux-amd64
-        rm -f hytale-downloader-windows-amd64.exe hytale-downloader.zip
+        mv hytale-downloader-linux-amd64 "$TOOLS_DIR/"
+        rm -f hytale-downloader-windows-amd64.exe hytale-downloader.zip QUICKSTART.md
       fi
     fi
   fi
   
+  # Copy credentials if they exist
+  [ -f "$TOOLS_DIR/.hytale-downloader-credentials.json" ] && cp "$TOOLS_DIR/.hytale-downloader-credentials.json" .
+  
   echo -e "${CYAN}[3/5]${NC} Downloading latest server files..."
-  if ./hytale-downloader-linux-amd64; then
+  if "$TOOLS_DIR/hytale-downloader-linux-amd64"; then
     echo -e "${GREEN}Server files downloaded.${NC}"
   else
     echo -e "${RED}Failed to download server files.${NC}" >&2
@@ -106,21 +362,24 @@ update_server() {
     exit 1
   fi
   
-  # Update server files
+  # Update server files (keep existing config and world data)
   if [ -d "Server" ]; then
-    rm -rf "$SERVER_DIR"/*
-    cp -r Server/* "$SERVER_DIR/" || { echo "Failed to copy server files." >&2; exit 1; }
+    # Remove old server files but keep world data, configs, and start script
+    find "$BASE_DIR" -mindepth 1 -maxdepth 1 ! -name 'universe' ! -name '*.json' ! -name 'backups' ! -name 'logs' ! -name '.sh' ! -name '.enc' -exec rm -rf {} + 2>/dev/null || true
+    cp -r Server/* "$BASE_DIR/" || { echo "Failed to copy server files." >&2; exit 1; }
   fi
   
   if [ -f "Assets.zip" ]; then
-    cp "Assets.zip" "$SERVER_DIR/" || { echo "Failed to copy Assets.zip." >&2; exit 1; }
+    cp "Assets.zip" "$BASE_DIR/" || { echo "Failed to copy Assets.zip." >&2; exit 1; }
   fi
   
-  # Clean up
-  rm -f "$DOWNLOADED_ZIP"
-  rm -rf Server
-  rm -f Assets.zip
-  rm -f QUICKSTART.md
+  # Save credentials back to tools directory
+  [ -f ".hytale-downloader-credentials.json" ] && cp ".hytale-downloader-credentials.json" "$TOOLS_DIR/"
+  
+  # Clean up temp directory
+  cd "$BASE_DIR" || exit 1
+  rm -rf "$TEMP_DIR"
+  mkdir -p "$TEMP_DIR"
   
   echo -e "${CYAN}[5/5]${NC} Starting Hytale service..."
   sudo systemctl start hytale
@@ -128,7 +387,6 @@ update_server() {
   echo ""
   echo -e "${GREEN}==========================================${NC}"
   echo -e "${BOLD}${GREEN}Update complete!${NC}"
-  echo -e "${BLUE}Check logs with: ${NC}journalctl -u hytale -f"
   echo -e "${GREEN}==========================================${NC}"
 }
 
@@ -223,11 +481,14 @@ fi
 
 # ---- 2. Create directories ----
 echo -e "${CYAN}[2/7]${NC} Creating directories..."
-mkdir -p "$SERVER_DIR"
+mkdir -p "$BASE_DIR"
+mkdir -p "$TOOLS_DIR"
+mkdir -p "$TEMP_DIR"
 
 
 # ---- 3. Install Hytale Downloader CLI ----
 echo -e "${CYAN}[3/7]${NC} Downloading Hytale Downloader..."
+cd "$TEMP_DIR" || { echo -e "${RED}Failed to change to $TEMP_DIR.${NC}" >&2; exit 1; }
 
 if wget --no-cookies --no-cache --show-progress -O hytale-downloader.zip "$DOWNLOADER_URL"; then
   echo -e "${GREEN}Hytale Downloader downloaded.${NC}"
@@ -244,26 +505,22 @@ else
 fi
 
 chmod +x hytale-downloader-linux-amd64
-rm -f hytale-downloader-windows-amd64.exe hytale-downloader.zip
-
-if [ "$(realpath QUICKSTART.md)" != "$BASE_DIR/QUICKSTART.md" ]; then
-  mv QUICKSTART.md "$BASE_DIR/"
-fi
-
-if [ "$(realpath hytale-downloader-linux-amd64)" != "$BASE_DIR/hytale-downloader-linux-amd64" ]; then
-  mv hytale-downloader-linux-amd64 "$BASE_DIR/"
-fi
+mv hytale-downloader-linux-amd64 "$TOOLS_DIR/"
+rm -f hytale-downloader-windows-amd64.exe hytale-downloader.zip QUICKSTART.md
 
 
 # ---- 4. Download server files ----
 echo -e "${CYAN}[4/7]${NC} Downloading Hytale server files..."
-cd "$BASE_DIR" || { echo -e "${RED}Failed to change to $BASE_DIR.${NC}" >&2; exit 1; }
-if ./hytale-downloader-linux-amd64; then
+cd "$TEMP_DIR" || { echo -e "${RED}Failed to change to $TEMP_DIR.${NC}" >&2; exit 1; }
+if "$TOOLS_DIR/hytale-downloader-linux-amd64"; then
   echo -e "${GREEN}Server files downloaded.${NC}"
 else
   echo -e "${RED}Failed to download server files.${NC}" >&2
   exit 1
 fi
+
+# Save credentials to tools directory
+[ -f ".hytale-downloader-credentials.json" ] && cp ".hytale-downloader-credentials.json" "$TOOLS_DIR/"
 
 # Expected structure: The downloader creates a zip file like "2026.01.15-c04fdfe10.zip"
 # Find the most recently created zip file
@@ -284,11 +541,11 @@ else
 fi
 
 # Expected structure after extraction: Server/ Assets.zip
-echo -e "${BLUE}Copying server files to $SERVER_DIR...${NC}"
+echo -e "${BLUE}Copying server files to $BASE_DIR...${NC}"
 if [ -d "Server" ]; then
   FILE_COUNT=$(find Server -type f | wc -l)
   echo -e "${BLUE}Copying ${FILE_COUNT} files...${NC}"
-  cp -rv Server/* "$SERVER_DIR/" 2>&1 | grep -v "^'" | sed "s/^/  ${CYAN}→${NC} /" || { echo -e "${RED}Failed to copy server files.${NC}" >&2; exit 1; }
+  cp -rv Server/* "$BASE_DIR/" 2>&1 | grep -v "^'" | sed "s/^/  ${CYAN}→${NC} /" || { echo -e "${RED}Failed to copy server files.${NC}" >&2; exit 1; }
   echo -e "${GREEN}✓ Server files copied.${NC}"
 else
   echo -e "${RED}Server directory not found after extraction.${NC}" >&2
@@ -298,23 +555,22 @@ fi
 if [ -f "Assets.zip" ]; then
   ASSETS_SIZE=$(du -h Assets.zip | cut -f1)
   echo -e "${BLUE}Copying Assets.zip (${ASSETS_SIZE})...${NC}"
-  cp "Assets.zip" "$SERVER_DIR/" || { echo -e "${RED}Failed to copy Assets.zip.${NC}" >&2; exit 1; }
+  cp "Assets.zip" "$BASE_DIR/" || { echo -e "${RED}Failed to copy Assets.zip.${NC}" >&2; exit 1; }
   echo -e "${GREEN}✓ Assets.zip copied.${NC}"
 else
   echo -e "${RED}Assets.zip not found after extraction.${NC}" >&2
   exit 1
 fi
 
-# Clean up temporary files
+# Clean up temp directory
 echo -e "${BLUE}Cleaning up temporary files...${NC}"
-rm -f "$DOWNLOADED_ZIP"
-rm -rf Server
-rm -f Assets.zip
-rm -f QUICKSTART.md
+cd "$BASE_DIR" || exit 1
+rm -rf "$TEMP_DIR"
+mkdir -p "$TEMP_DIR"
 
 echo -e "${CYAN}[5/7]${NC} Creating server start script..."
 
-cat << 'EOF' > "$SERVER_DIR/start.sh"
+cat << 'EOF' > "$BASE_DIR/start.sh"
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -393,8 +649,8 @@ echo "[INFO] Tmux session ended. Server stopped."
 EOF
 
 
-chmod +x "$SERVER_DIR/start.sh"
-echo -e "${GREEN}Start script created at $SERVER_DIR/start.sh.${NC}"
+chmod +x "$BASE_DIR/start.sh"
+echo -e "${GREEN}Start script created at $BASE_DIR/start.sh.${NC}"
 
 echo -e "${CYAN}[6/7]${NC} Creating systemd service..."
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
@@ -404,8 +660,8 @@ After=network.target
 
 [Service]
 User=$USER_NAME
-WorkingDirectory=$SERVER_DIR
-ExecStart=$SERVER_DIR/start.sh
+WorkingDirectory=$BASE_DIR
+ExecStart=$BASE_DIR/start.sh
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -468,7 +724,8 @@ echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"
 echo "IP Address: $SERVER_IP:$CUSTOM_PORT"
-echo "Server Directory: $SERVER_DIR"
+echo "Server Directory: $BASE_DIR"
+echo "Tools Directory: $TOOLS_DIR"
 echo "Tmux Session: hytale-server"
 echo "=========================================="
 }
@@ -496,14 +753,14 @@ start_server() {
     echo ""
     
     # Only wait for authentication URL if auth.enc doesn't exist (first start)
-    if [ ! -f "$SERVER_DIR/auth.enc" ]; then
+    if [ ! -f "$BASE_DIR/auth.enc" ]; then
       echo "Waiting for authentication URL..."
       sleep 5
       
       # Try to get auth URL from logs
-      if [ -d "$SERVER_DIR/logs" ]; then
+      if [ -d "$BASE_DIR/logs" ]; then
         for i in {1..6}; do
-          LATEST_LOG=$(ls -t "$SERVER_DIR/logs"/*.log 2>/dev/null | head -1)
+          LATEST_LOG=$(ls -t "$BASE_DIR/logs"/*.log 2>/dev/null | head -1)
           if [ -n "$LATEST_LOG" ]; then
             AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
             if [ -n "$AUTH_URL" ]; then
@@ -521,7 +778,6 @@ start_server() {
       fi
     fi
     
-    echo "Check logs with: journalctl -u hytale -f"
     echo "Attach to console: ./Hytale-Server console"
   else
     echo -e "${RED}Failed to start Hytale server.${NC}" >&2
@@ -570,13 +826,16 @@ show_usage() {
   echo "Usage: $0 [command]"
   echo ""
   echo "Commands:"
-  echo "  install    - Install Hytale server"
-  echo "  start      - Start Hytale server"
-  echo "  stop       - Stop Hytale server"
-  echo "  update     - Update Hytale server"
-  echo "  uninstall  - Uninstall Hytale server"
-  echo "  console    - Attach to server console"
-  echo "  show       - Show interactive menu"
+  echo "  install     - Install Hytale server"
+  echo "  start       - Start Hytale server"
+  echo "  stop        - Stop Hytale server"
+  echo "  update      - Update Hytale server"
+  echo "  uninstall   - Uninstall Hytale server"
+  echo "  console     - Attach to server console"
+  echo "  backup      - Create manual backup"
+  echo "  restore     - Restore from backup"
+  echo "  autobackup  - Toggle automatic backups"
+  echo "  show        - Show interactive menu"
   echo ""
   echo "Run without arguments to use interactive menu."
 }
@@ -618,6 +877,15 @@ else
       ;;
     console)
       attach_console
+      ;;
+    backup)
+      backup_server
+      ;;
+    restore)
+      restore_server
+      ;;
+    autobackup)
+      toggle_autobackup
       ;;
     show)
       show_menu

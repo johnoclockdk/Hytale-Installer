@@ -27,6 +27,9 @@ That's it! Visit the authentication URL when prompted.
 | `./Hytale-Server stop` | Stop the server |
 | `./Hytale-Server console` | Open server console |
 | `./Hytale-Server update` | Update to latest version |
+| `./Hytale-Server backup` | Create manual backup |
+| `./Hytale-Server restore` | Restore from backup |
+| `./Hytale-Server autobackup` | Toggle automatic backups |
 | `./Hytale-Server uninstall` | Remove completely |
 
 💡 Run `./Hytale-Server` without arguments for an interactive menu.
@@ -39,7 +42,9 @@ That's it! Visit the authentication URL when prompted.
 - 🔐 **Auto Authentication** - OAuth login with encrypted persistence
 - 🖥️ **Tmux Console** - Persistent console access (detach with `Ctrl+B` then `D`)
 - 🚀 **Systemd Service** - Auto-start on boot, automatic restarts
-- 🔥 **Firewall Setup** - Automatic UFW configuration
+- � **Smart Backups** - Manual & automatic backups with retention management
+- 🔄 **Easy Restore** - Quick world restoration from backup archives
+- �🔥 **Firewall Setup** - Automatic UFW configuration
 - ⚙️ **Custom Ports** - Choose your own port during installation
 
 ---
@@ -61,7 +66,48 @@ Authenticate **once** - your credentials persist across all restarts.
 
 ---
 
-## 🖥️ System Requirements
+## � Backup & Restore
+
+### Manual Backup
+
+Create a backup of your world and configuration:
+
+```bash
+./Hytale-Server backup
+```
+
+**What's backed up:**
+- `universe/` - World data
+- `config.json` - Server configuration
+- `permissions.json` - Player permissions
+- `bans.json` - Banned players
+- `whitelist.json` - Whitelisted players
+
+### Automatic Backups
+
+Enable daily backups at 2:00 AM:
+
+```bash
+./Hytale-Server autobackup
+```
+
+- Keeps last 7 backups automatically
+- Compressed archives save disk space
+- Toggle on/off anytime
+
+### Restore from Backup
+
+Restore your world from a previous backup:
+
+```bash
+./Hytale-Server restore
+```
+
+Select from available backups - safety backup created automatically before restore.
+
+---
+
+## �🖥️ System Requirements
 
 | Requirement | Details |
 |-------------|---------|
@@ -92,7 +138,24 @@ systemctl status hytale
 ./Hytale-Server console
 ```
 
-**Default server location:** `~/hytale_server/`
+### 📁 Directory Structure
+
+```
+~/hytale_server/          # Main server files
+├── HytaleServer.jar
+├── Assets.zip
+├── universe/             # World data
+├── config.json
+├── permissions.json
+├── backups/              # Backup archives
+└── logs/
+
+~/.hytale-tools/          # Tools (isolated)
+├── hytale-downloader-linux-amd64
+└── .hytale-downloader-credentials.json
+
+~/.hytale-temp/           # Temporary downloads
+```
 
 ---
 
@@ -124,6 +187,21 @@ tmux ls                      # Check if session exists
 # Then in console:
 /auth persistence Encrypted
 /auth login device
+```
+</details>
+
+<details>
+<summary><b>Backup failed or restore issues</b></summary>
+
+```bash
+# Check backup directory
+ls -lh ~/hytale_server/backups/
+
+# Check disk space
+df -h
+
+# Manual backup location
+~/hytale_server/backups/hytale-backup-YYYYMMDD-HHMMSS.tar.gz
 ```
 </details>
 

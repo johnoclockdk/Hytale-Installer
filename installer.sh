@@ -339,11 +339,12 @@ fi
 
 cat << EOF > "$SERVER_DIR/start.sh"
 #!/bin/bash
-cd "\$(dirname "\$0")"
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+cd "\$SCRIPT_DIR"
 
 # Check if this is the first run (no auth token file exists)
 FIRST_RUN=false
-if [ ! -f ".authenticated" ]; then
+if [ ! -f "\$SCRIPT_DIR/.authenticated" ]; then
   FIRST_RUN=true
 fi
 
@@ -367,7 +368,7 @@ expect {
 EXPECT_EOF
     
     # Mark as authenticated after first successful run
-    touch .authenticated
+    touch "\$SCRIPT_DIR/.authenticated"
     FIRST_RUN=false
   else
     # Subsequent runs: just start the server normally

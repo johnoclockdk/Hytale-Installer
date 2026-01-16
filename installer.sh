@@ -552,7 +552,7 @@ echo "   tail -f $SERVER_DIR/logs/*.log"
 echo ""
 echo "4) Check authentication status:"
 echo "   ls -la $SERVER_DIR/.authenticated"
-echo "   Note: File location is $SERVER_DIR/.authenticated (lowercase 'server')"fd
+echo "   Note: File location is $SERVER_DIR/.authenticated (lowercase 'server')"
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"

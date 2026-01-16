@@ -314,7 +314,7 @@ rm -f QUICKSTART.md
 
 echo -e "${CYAN}[5/7]${NC} Creating server start script..."
 
-cat << 'EOF' > "$SERVER_DIR/start.sh"
+cat << 'EOF' > "$SERVER_DIR/start"
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -393,8 +393,8 @@ echo "[INFO] Tmux session ended. Server stopped."
 EOF
 
 
-chmod +x "$SERVER_DIR/start.sh"
-echo -e "${GREEN}Start script created at $SERVER_DIR/start.sh.${NC}"
+chmod +x "$SERVER_DIR/start"
+echo -e "${GREEN}Start script created at $SERVER_DIR/start.${NC}"
 
 echo -e "${CYAN}[6/7]${NC} Creating systemd service..."
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
@@ -405,7 +405,7 @@ After=network.target
 [Service]
 User=$USER_NAME
 WorkingDirectory=$SERVER_DIR
-ExecStart=$SERVER_DIR/start.sh
+ExecStart=$SERVER_DIR/start
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -451,19 +451,19 @@ echo "=========================================="
 echo "INSTALL COMPLETE!"
 echo ""
 echo -e "${YELLOW}Server is NOT started automatically.${NC}"
-echo -e "${YELLOW}Start it with: ./installer.sh start${NC}"
+echo -e "${YELLOW}Start it with: ./installer start${NC}"
 echo ""
 echo "NEXT STEPS:"
 echo ""
 echo "1) Start the server:"
-echo "   ./installer.sh start"
+echo "   ./installer start"
 echo ""
 echo "2) Attach to server console:"
-echo "   ./installer.sh console"
+echo "   ./installer console"
 echo "   (Detach: Ctrl+B then D)"
 echo ""
 echo "3) Manage the service:"
-echo "   ./installer.sh start|stop"
+echo "   ./installer start|stop"
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"
@@ -521,7 +521,7 @@ start_server() {
       fi
     fi
     
-    echo "Attach to console: ./installer.sh console"
+    echo "Attach to console: ./installer console"
   else
     echo -e "${RED}Failed to start Hytale server.${NC}" >&2
     exit 1

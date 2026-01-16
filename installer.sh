@@ -1,10 +1,6 @@
 #!/bin/bash
 set -e
 
-# Source color definitions
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/helper.sh"
-
 # ================= CONFIG =================
 USER_NAME=$(whoami)
 BASE_DIR="$(pwd)/hytale_server"

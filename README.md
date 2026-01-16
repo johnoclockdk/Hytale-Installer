@@ -11,8 +11,10 @@ Simple, fast, and fully automated setup with authentication persistence and tmux
 ## 🚀 Quick Install
 
 ```bash
-wget https://raw.githubusercontent.com/johnoclockdk/Hytale-Installer/main/installer.sh
-chmod +x installer.sh
+wget https://raw.githubusercontent.com/johnoclockdk/Hytale-Server-Installer/main/Hytale-Server
+chmod +x Hytale-Server
+./Hytale-Server install
+./Hytale-Server start
 ```
 
 That's it! Visit the authentication URL when prompted.
@@ -23,14 +25,14 @@ That's it! Visit the authentication URL when prompted.
 
 | Command | Description |
 |---------|-------------|
-| `./installer.sh install` | Install Hytale server |
-| `./installer.sh start` | Start the server |
-| `./installer.sh stop` | Stop the server |
-| `./installer.sh console` | Open server console |
-| `./installer.sh update` | Update to latest version |
-| `./installer.sh uninstall` | Remove completely |
+| `./Hytale-Server install` | Install Hytale server |
+| `./Hytale-Server start` | Start the server |
+| `./Hytale-Server stop` | Stop the server |
+| `./Hytale-Server console` | Open server console |
+| `./Hytale-Server update` | Update to latest version |
+| `./Hytale-Server uninstall` | Remove completely |
 
-💡 Run `./installer.sh` without arguments for an interactive menu.
+💡 Run `./Hytale-Server` without arguments for an interactive menu.
 
 ---
 
@@ -50,7 +52,7 @@ That's it! Visit the authentication URL when prompted.
 Start the server after installation:
 
 ```bash
-./installer.sh start
+./Hytale-Server start
 ```
 
 You'll see an authentication URL:
@@ -90,7 +92,7 @@ journalctl -u hytale -f
 systemctl status hytale
 
 # Access console
-./installer.sh console
+./Hytale-Server console
 ```
 
 **Default server location:** `~/hytale_server/`
@@ -112,8 +114,8 @@ journalctl -u hytale -f
 <summary><b>Console not accessible</b></summary>
 
 ```bash
-tmux ls                    # Check if session exists
-./installer.sh console     # Reconnect
+tmux ls                      # Check if session exists
+./Hytale-Server console   # Reconnect
 ```
 </details>
 
@@ -121,7 +123,7 @@ tmux ls                    # Check if session exists
 <summary><b>Re-authenticate manually</b></summary>
 
 ```bash
-./installer.sh console
+./Hytale-Server console
 # Then in console:
 /auth persistence Encrypted
 /auth login device

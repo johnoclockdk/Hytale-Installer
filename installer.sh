@@ -329,112 +329,108 @@ rm -rf Server
 rm -f Assets.zip
 rm -f QUICKSTART.md
 
-echo -e "${CYAN}[5/8]${NC} Installing dependencies and creating server start script..."
-# Install expect if not already installed
-if ! command -v expect >/dev/null 2>&1; then
-  echo -e "${BLUE}Installing expect...${NC}"
-  sudo apt-get update -qq
-  sudo apt-get install -y expect
-fi
+echo -e "${CYAN}[5/8]${NC} Creating server start script..."
 
-cat << EOF > "$SERVER_DIR/start.sh"
+cat << 'EOF' > "$SERVER_DIR/start.sh"
 #!/bin/bash
-SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-cd "\$SCRIPT_DIR"
-LOGS_DIR="\$SCRIPT_DIR/logs"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+LOGS_DIR="$SCRIPT_DIR/logs"
 
-# Monitor auth status in background
-monitor_auth() {
+# Monitor logs and send auth command when needed
+monitor_and_auth() {
+  local SERVER_PID=$1
+  
   # Wait for logs directory to be created
-  while [ ! -d "\$LOGS_DIR" ]; do
+  while [ ! -d "$LOGS_DIR" ]; do
     sleep 1
   done
   
-  local AUTH_STARTED=false
+  echo "[AUTH] Monitoring logs for authentication requests..."
+  local SENT_AUTH=false
   
-  # Monitor the latest log file for successful authentication
-  while true; do
-    # Always get the most recent log file (in case server restarts)
-    LATEST_LOG=\$(ls -t "\$LOGS_DIR"/*.log 2>/dev/null | head -1)
-    if [ -n "\$LATEST_LOG" ]; then
-      # First check if auth process has started
-      if grep -q "Waiting for authorization" "\$LATEST_LOG" 2>/dev/null; then
-        AUTH_STARTED=true
+  # Monitor the latest log file
+  while kill -0 $SERVER_PID 2>/dev/null; do
+    LATEST_LOG=$(ls -t "$LOGS_DIR"/*.log 2>/dev/null | head -1)
+    if [ -n "$LATEST_LOG" ]; then
+      # Check if server needs authentication
+      if ! $SENT_AUTH && tail -20 "$LATEST_LOG" | grep -q "No server tokens configured"; then
+        echo "[AUTH] Server needs authentication, sending auth command..."
+        sleep 2
+        # Send the auth command via server console input
+        echo "/auth login device" > /proc/$SERVER_PID/fd/0 2>/dev/null || true
+        SENT_AUTH=true
+        echo "[AUTH] Auth command sent. Watch logs for the authentication URL."
       fi
       
-      # Only look for completion if auth has started
-      if [ "\$AUTH_STARTED" = true ]; then
-        # Check for successful auth completion
-        # Look for messages that indicate auth succeeded (not just started)
-        if grep -qE "Authenticated as|token refresh succeeded|Login successful|Authorization succeeded" "\$LATEST_LOG" 2>/dev/null; then
-          touch "\$SCRIPT_DIR/.authenticated"
-          echo "[AUTH] Authentication successful - marked as authenticated"
-          echo "[AUTH] File created: \$SCRIPT_DIR/.authenticated"
-          exit 0
+      # Check if authentication URL was generated
+      if grep -q "user_code=" "$LATEST_LOG" 2>/dev/null; then
+        # Extract and display the URL
+        AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" | tail -1)
+        if [ -n "$AUTH_URL" ]; then
+          echo ""
+          echo "=========================================="
+          echo "AUTHENTICATION REQUIRED"
+          echo "Visit: $AUTH_URL"
+          echo "=========================================="
+          echo ""
         fi
         
-        # Also check if server is no longer waiting (auth completed)
-        if grep -q "Auth credential store" "\$LATEST_LOG" 2>/dev/null; then
-          # Wait a bit more to see if there's a completion message
+        # Monitor for successful authentication
+        while kill -0 $SERVER_PID 2>/dev/null; do
           sleep 5
-          # Check again for any server startup after auth
-          if grep -qE "Setup phase completed|Booting up" "\$LATEST_LOG" | tail -5 | grep -qE "Setup phase completed|Booting up" 2>/dev/null; then
-            # If we see setup completing after auth started, assume it worked
-            if ! grep -q "No server tokens configured" "\$(tail -20 "\$LATEST_LOG")"; then
-              touch "\$SCRIPT_DIR/.authenticated"
-              echo "[AUTH] Authentication appears successful - marked as authenticated"
-              echo "[AUTH] File created: \$SCRIPT_DIR/.authenticated"
-              exit 0
+          LATEST_LOG=$(ls -t "$LOGS_DIR"/*.log 2>/dev/null | head -1)
+          if [ -n "$LATEST_LOG" ]; then
+            LAST_30=$(tail -30 "$LATEST_LOG")
+            # If we see the server continuing past auth without errors
+            if echo "$LAST_30" | grep -qE "Loading assets|Setup phase completed"; then
+              if ! echo "$LAST_30" | grep -q "No server tokens configured"; then
+                touch "$SCRIPT_DIR/.authenticated"
+                echo "[AUTH] Authentication successful!"
+                echo "[AUTH] File created: $SCRIPT_DIR/.authenticated"
+                return 0
+              fi
             fi
           fi
-        fi
+        done
       fi
     fi
-    sleep 3
+    sleep 2
   done
 }
 
 # Check if this is the first run (no auth token file exists)
 FIRST_RUN=false
-if [ ! -f "\$SCRIPT_DIR/.authenticated" ]; then
+if [ ! -f "$SCRIPT_DIR/.authenticated" ]; then
   FIRST_RUN=true
 fi
 
 while true; do
   echo "Starting Hytale Server..."
   
-  if [ "\$FIRST_RUN" = true ]; then
-    # Start auth monitor in background
-    monitor_auth &
-    MONITOR_PID=\$!
+  if [ "$FIRST_RUN" = true ]; then
+    # First run: start server and monitor for auth
+    java -jar HytaleServer.jar --assets Assets.zip &
+    SERVER_PID=$!
     
-    # First run: auto-authenticate using expect
-    expect << 'EXPECT_EOF'
-set timeout -1
-spawn java -jar HytaleServer.jar --assets Assets.zip
-
-# Wait for "No server tokens configured" message and send auth command
-expect {
-  "No server tokens configured" {
-    send "/auth login device\r"
-    exp_continue
-  }
-  "Visit: https://oauth.accounts.hytale.com" {
-    exp_continue
-  }
-  eof
-}
-EXPECT_EOF
+    # Monitor in background
+    monitor_and_auth $SERVER_PID &
+    MONITOR_PID=$!
+    
+    # Wait for server to finish
+    wait $SERVER_PID
     
     # Kill monitor if still running
-    kill \$MONITOR_PID 2>/dev/null || true
+    kill $MONITOR_PID 2>/dev/null || true
     
     # Check if authentication was successful
-    if [ -f "\$SCRIPT_DIR/.authenticated" ]; then
+    if [ -f "$SCRIPT_DIR/.authenticated" ]; then
       FIRST_RUN=false
       echo "[INFO] Server authenticated successfully"
     else
-      echo "[WARN] Authentication may not be complete. Check logs in \$LOGS_DIR/"
+      echo "[WARN] Authentication may not be complete."
+      echo "[WARN] If you completed auth, create the file manually:"
+      echo "       touch $SCRIPT_DIR/.authenticated"
     fi
   else
     # Subsequent runs: just start the server normally
@@ -544,6 +540,8 @@ fi
 echo "NEXT STEPS:"
 echo "1) Complete authentication using the URL above (or in logs)"
 echo "   - The .authenticated file will be created automatically after successful auth"
+echo "   - If auto-creation fails, manually create it with:"
+echo "     touch $SERVER_DIR/.authenticated"
 echo ""
 echo "2) Manage the service:"
 echo "   sudo systemctl status hytale"
@@ -554,7 +552,7 @@ echo "   tail -f $SERVER_DIR/logs/*.log"
 echo ""
 echo "4) Check authentication status:"
 echo "   ls -la $SERVER_DIR/.authenticated"
-echo "   Note: File location is $SERVER_DIR/.authenticated (lowercase 'server')"
+echo "   Note: File location is $SERVER_DIR/.authenticated (lowercase 'server')"fd
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"

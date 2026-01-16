@@ -350,21 +350,42 @@ monitor_auth() {
     sleep 1
   done
   
+  local AUTH_STARTED=false
+  
   # Monitor the latest log file for successful authentication
   while true; do
     # Always get the most recent log file (in case server restarts)
     LATEST_LOG=\$(ls -t "\$LOGS_DIR"/*.log 2>/dev/null | head -1)
     if [ -n "\$LATEST_LOG" ]; then
-      # Check for successful auth completion (look for auth success indicators)
-      if grep -qE "Authenticated as|Authentication successful|Auth credential store|Server tokens configured" "\$LATEST_LOG" 2>/dev/null; then
-        # Double-check it's not the initial "No server tokens" message
-        if ! grep -q "No server tokens configured" "\$LATEST_LOG" 2>/dev/null || grep -qE "Authenticated as|Authentication successful" "\$LATEST_LOG" 2>/dev/null; then
-          # Verify auth actually succeeded by checking for credential store after auth command
-          if grep -q "Auth credential store" "\$LATEST_LOG" 2>/dev/null; then
-            touch "\$SCRIPT_DIR/.authenticated"
-            echo "[AUTH] Authentication successful - marked as authenticated"
-            echo "[AUTH] File created: \$SCRIPT_DIR/.authenticated"
-            exit 0
+      # First check if auth process has started
+      if grep -q "Waiting for authorization" "\$LATEST_LOG" 2>/dev/null; then
+        AUTH_STARTED=true
+      fi
+      
+      # Only look for completion if auth has started
+      if [ "\$AUTH_STARTED" = true ]; then
+        # Check for successful auth completion
+        # Look for messages that indicate auth succeeded (not just started)
+        if grep -qE "Authenticated as|token refresh succeeded|Login successful|Authorization succeeded" "\$LATEST_LOG" 2>/dev/null; then
+          touch "\$SCRIPT_DIR/.authenticated"
+          echo "[AUTH] Authentication successful - marked as authenticated"
+          echo "[AUTH] File created: \$SCRIPT_DIR/.authenticated"
+          exit 0
+        fi
+        
+        # Also check if server is no longer waiting (auth completed)
+        if grep -q "Auth credential store" "\$LATEST_LOG" 2>/dev/null; then
+          # Wait a bit more to see if there's a completion message
+          sleep 5
+          # Check again for any server startup after auth
+          if grep -qE "Setup phase completed|Booting up" "\$LATEST_LOG" | tail -5 | grep -qE "Setup phase completed|Booting up" 2>/dev/null; then
+            # If we see setup completing after auth started, assume it worked
+            if ! grep -q "No server tokens configured" "\$(tail -20 "\$LATEST_LOG")"; then
+              touch "\$SCRIPT_DIR/.authenticated"
+              echo "[AUTH] Authentication appears successful - marked as authenticated"
+              echo "[AUTH] File created: \$SCRIPT_DIR/.authenticated"
+              exit 0
+            fi
           fi
         fi
       fi
@@ -490,11 +511,8 @@ echo "Waiting for server to start and generate authentication URL..."
 AUTH_URL=""
 for i in {1..6}; do
   sleep 10
-  # Try to get auth URL from journalctl
-  AUTH_URL=$(journalctl -u hytale -n 150 --no-pager -o cat 2>/dev/null | grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' | tail -1)
-  
-  # If not found in journalctl, try the logs folder
-  if [ -z "$AUTH_URL" ] && [ -d "$SERVER_DIR/logs" ]; then
+  # Get auth URL from the latest log file
+  if [ -d "$SERVER_DIR/logs" ]; then
     LATEST_LOG=$(ls -t "$SERVER_DIR/logs"/*.log 2>/dev/null | head -1)
     if [ -n "$LATEST_LOG" ]; then
       AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
@@ -536,6 +554,7 @@ echo "   tail -f $SERVER_DIR/logs/*.log"
 echo ""
 echo "4) Check authentication status:"
 echo "   ls -la $SERVER_DIR/.authenticated"
+echo "   Note: File location is $SERVER_DIR/.authenticated (lowercase 'server')"
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"

@@ -341,10 +341,18 @@ cat << EOF > "$SERVER_DIR/start.sh"
 #!/bin/bash
 cd "\$(dirname "\$0")"
 
+# Check if this is the first run (no auth token file exists)
+FIRST_RUN=false
+if [ ! -f ".authenticated" ]; then
+  FIRST_RUN=true
+fi
+
 while true; do
   echo "Starting Hytale Server..."
   
-  expect << 'EXPECT_EOF'
+  if [ "\$FIRST_RUN" = true ]; then
+    # First run: auto-authenticate
+    expect << 'EXPECT_EOF'
 set timeout -1
 spawn java -jar HytaleServer.jar --assets Assets.zip
 
@@ -357,6 +365,14 @@ expect {
   eof
 }
 EXPECT_EOF
+    
+    # Mark as authenticated after first successful run
+    touch .authenticated
+    FIRST_RUN=false
+  else
+    # Subsequent runs: just start the server normally
+    java -jar HytaleServer.jar --assets Assets.zip
+  fi
   
   echo "Server stopped. Restarting in 5 seconds..."
   sleep 5

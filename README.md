@@ -1,49 +1,143 @@
-# :dragon: Hytale Installer
+# 🐉 Hytale Server Installer
 
-Unofficial script for installing a Hytale Dedicated Server. Works with the latest Hytale server releases!
+**One-command automated installer for Hytale Dedicated Server**
 
-Read more about [Hytale](https://hytale.com/) here. This script is not associated with the official Hytale project.
+Simple, fast, and fully automated setup with authentication persistence and tmux console access.
 
-## Features
-
-- Automatic installation of Java 25 (if not present)
-- Automatic installation of required packages (unzip, expect)
-- Automatic download and setup of Hytale server files
-- Systemd service creation for easy management
-- Automatic firewall configuration (UFW)
-- Scheduled service restarts every 3 days
-
-## Help and support
-
-For help and support, join the [Discord Chat](https://discord.gg/hytale).
-
-## Supported installations
-
-| Operating System | Version           | Supported          |
-| --------------- | ---------------- | ------------------ |
-| Ubuntu          | 20.04, 22.04, 24.04 | :white_check_mark: |
-| Debian          | 10, 11, 12, 13   | :white_check_mark: |
-
-## Using the installation script
-
-To use the installation script, simply run this command as root or with sudo:
-
-```bash
-bash <(wget --no-cache -qO- https://raw.githubusercontent.com/johnoclockdk/Hytale-Installer/main/installer.sh)
-```
-
-_Note: You may need to be logged in as root on some systems._
-
-## Firewall setup
-
-The script can configure UFW to allow the Hytale server port (default: 5520/udp). If UFW is not installed, you will need to open the port manually.
-
-## Development & Testing
-
-To test the script, use a fresh VM or container with your preferred supported OS. Make sure to review the script before running in production environments.
-
-## Contributors ✨
+> ⚠️ Unofficial tool - not affiliated with Hypixel Studios
 
 ---
 
-This project is not affiliated with or endorsed by Hypixel Studios or the official Hytale project. All trademarks and copyrights belong to their respective owners.
+## 🚀 Quick Install
+
+```bash
+wget https://raw.githubusercontent.com/johnoclockdk/Hytale-Installer/main/installer.sh
+chmod +x installer.sh
+```
+
+That's it! Visit the authentication URL when prompted.
+
+---
+
+## 📋 Commands
+
+| Command | Description |
+|---------|-------------|
+| `./installer.sh install` | Install Hytale server |
+| `./installer.sh start` | Start the server |
+| `./installer.sh stop` | Stop the server |
+| `./installer.sh console` | Open server console |
+| `./installer.sh update` | Update to latest version |
+| `./installer.sh uninstall` | Remove completely |
+
+💡 Run `./installer.sh` without arguments for an interactive menu.
+
+---
+
+## ✨ Features
+
+- 🔧 **Zero Configuration** - Installs Java 25 and all dependencies automatically
+- 🔐 **Auto Authentication** - OAuth login with encrypted persistence
+- 🖥️ **Tmux Console** - Persistent console access (detach with `Ctrl+B` then `D`)
+- 🚀 **Systemd Service** - Auto-start on boot, automatic restarts
+- 🔥 **Firewall Setup** - Automatic UFW configuration
+- ⚙️ **Custom Ports** - Choose your own port during installation
+
+---
+
+## 🔑 First Time Setup
+
+Start the server after installation:
+
+```bash
+./installer.sh start
+```
+
+You'll see an authentication URL:
+```
+🔗 Visit: https://oauth.accounts.hytale.com/oauth2/device/verify?user_code=xxxxx
+```
+
+Authenticate **once** - your credentials persist across all restarts.
+
+---
+
+## 🖥️ System Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **OS** | Ubuntu 20.04+ or Debian 10+ |
+| **Disk** | 5 GB minimum |
+| **Access** | sudo/root |
+| **Account** | Valid Hytale account |
+
+### Supported Distributions
+
+| Distribution | Versions | Status |
+|--------------|----------|--------|
+| Ubuntu | 20.04, 22.04, 24.04 | ✅ |
+| Debian | 10, 11, 12, 13 | ✅ |
+
+---
+
+## 📊 Monitoring
+
+```bash
+# Real-time logs
+journalctl -u hytale -f
+
+# Service status
+systemctl status hytale
+
+# Access console
+./installer.sh console
+```
+
+**Default server location:** `~/hytale_server/`
+
+---
+
+## 🔧 Troubleshooting
+
+<details>
+<summary><b>Server won't start</b></summary>
+
+```bash
+systemctl status hytale
+journalctl -u hytale -f
+```
+</details>
+
+<details>
+<summary><b>Console not accessible</b></summary>
+
+```bash
+tmux ls                    # Check if session exists
+./installer.sh console     # Reconnect
+```
+</details>
+
+<details>
+<summary><b>Re-authenticate manually</b></summary>
+
+```bash
+./installer.sh console
+# Then in console:
+/auth persistence Encrypted
+/auth login device
+```
+</details>
+
+---
+
+## 💬 Support
+
+Need help? Join the [Hytale Discord](https://discord.gg/hytale)
+
+---
+
+## 📜 License & Disclaimer
+
+This project is **not affiliated** with Hypixel Studios or the official Hytale project.
+
+All trademarks and copyrights belong to their respective owners.

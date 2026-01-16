@@ -11,9 +11,7 @@ Simple, fast, and fully automated setup with authentication persistence and tmux
 ## 🚀 Quick Install
 
 ```bash
-wget https://raw.githubusercontent.com/johnoclockdk/Hytale-Server-Installer/main/Hytale-Server 
-chmod +x Hytale-Server
-./Hytale-Server install
+wget https://raw.githubusercontent.com/johnoclockdk/Hytale-Server-Installer/main/Hytale-Server && chmod +x Hytale-Server && ./Hytale-Server install
 ```
 
 That's it! Visit the authentication URL when prompted.

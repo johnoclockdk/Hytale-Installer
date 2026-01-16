@@ -11,28 +11,6 @@ RESTART_CRON="0 0 */3 * * /usr/bin/systemctl restart hytale"
 PORT=5520
 # =========================================
 
-
-show_menu() {
-  echo -e "${CYAN}==========================================${NC}"
-  echo -e "${BOLD}${CYAN}   Hytale Dedicated Server Manager${NC}"
-  echo -e "${CYAN}==========================================${NC}"
-  echo ""
-  echo -e "${BLUE}1)${NC} Install Hytale Server"
-  echo -e "${BLUE}2)${NC} Update Hytale Server"
-  echo -e "${BLUE}3)${NC} Uninstall Hytale Server"
-  echo -e "${BLUE}4)${NC} Exit"
-  echo ""
-  read -p "Select an option [1-4]: " choice
-  
-  case $choice in
-    1) install_server ;;
-    2) update_server ;;
-    3) uninstall_server ;;
-    4) echo -e "${CYAN}Exiting...${NC}"; exit 0 ;;
-    *) echo -e "${RED}Invalid option. Please try again.${NC}"; show_menu ;;
-  esac
-}
-
 uninstall_server() {
   echo ""
   echo -e "${BOLD}${YELLOW}=== Uninstalling Hytale Server ===${NC}"
@@ -58,10 +36,6 @@ uninstall_server() {
     sudo rm -f "$SERVICE_FILE"
     sudo systemctl daemon-reload
   fi
-  
-  # Remove cron job
-  echo -e "${BLUE}Removing cron job...${NC}"
-  ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ) | sudo crontab - 2>/dev/null || true
   
   # Remove server files
   if [ -d "$BASE_DIR" ]; then
@@ -187,7 +161,7 @@ install_server() {
   fi
   echo ""
 
-echo -e "${CYAN}[1/8]${NC} Checking dependencies..."
+echo -e "${CYAN}[1/7]${NC} Checking dependencies..."
 
 # Check and install unzip if missing
 if ! command -v unzip >/dev/null 2>&1; then
@@ -197,6 +171,15 @@ if ! command -v unzip >/dev/null 2>&1; then
   echo -e "${GREEN}✓ unzip installed.${NC}"
 else
   echo -e "${GREEN}✓ unzip is already installed.${NC}"
+fi
+
+# Check and install tmux if missing
+if ! command -v tmux >/dev/null 2>&1; then
+  echo -e "${BLUE}Installing tmux...${NC}"
+  sudo apt-get install -y tmux
+  echo -e "${GREEN}✓ tmux installed.${NC}"
+else
+  echo -e "${GREEN}✓ tmux is already installed.${NC}"
 fi
 
 echo -e "${BLUE}Checking Java installation...${NC}"
@@ -239,12 +222,12 @@ fi
 
 
 # ---- 2. Create directories ----
-echo -e "${CYAN}[2/8]${NC} Creating directories..."
+echo -e "${CYAN}[2/7]${NC} Creating directories..."
 mkdir -p "$SERVER_DIR"
 
 
 # ---- 3. Install Hytale Downloader CLI ----
-echo -e "${CYAN}[3/8]${NC} Downloading Hytale Downloader..."
+echo -e "${CYAN}[3/7]${NC} Downloading Hytale Downloader..."
 
 if wget --no-cookies --no-cache --show-progress -O hytale-downloader.zip "$DOWNLOADER_URL"; then
   echo -e "${GREEN}Hytale Downloader downloaded.${NC}"
@@ -273,7 +256,7 @@ fi
 
 
 # ---- 4. Download server files ----
-echo -e "${CYAN}[4/8]${NC} Downloading Hytale server files..."
+echo -e "${CYAN}[4/7]${NC} Downloading Hytale server files..."
 cd "$BASE_DIR" || { echo -e "${RED}Failed to change to $BASE_DIR.${NC}" >&2; exit 1; }
 if ./hytale-downloader-linux-amd64; then
   echo -e "${GREEN}Server files downloaded.${NC}"
@@ -329,18 +312,17 @@ rm -rf Server
 rm -f Assets.zip
 rm -f QUICKSTART.md
 
-echo -e "${CYAN}[5/8]${NC} Creating server start script..."
+echo -e "${CYAN}[5/7]${NC} Creating server start script..."
 
 cat << 'EOF' > "$SERVER_DIR/start.sh"
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 LOGS_DIR="$SCRIPT_DIR/logs"
+SESSION_NAME="hytale-server"
 
 # Monitor logs and send auth command when needed
 monitor_and_auth() {
-  local SERVER_PID=$1
-  
   # Wait for logs directory to be created
   while [ ! -d "$LOGS_DIR" ]; do
     sleep 1
@@ -350,17 +332,20 @@ monitor_and_auth() {
   local SENT_AUTH=false
   
   # Monitor the latest log file
-  while kill -0 $SERVER_PID 2>/dev/null; do
+  while true; do
     LATEST_LOG=$(ls -t "$LOGS_DIR"/*.log 2>/dev/null | head -1)
     if [ -n "$LATEST_LOG" ]; then
       # Check if server needs authentication
-      if ! $SENT_AUTH && tail -20 "$LATEST_LOG" | grep -q "No server tokens configured"; then
-        echo "[AUTH] Server needs authentication, sending auth command..."
-        sleep 2
-        # Send the auth command via server console input
-        echo "/auth login device" > /proc/$SERVER_PID/fd/0 2>/dev/null || true
+      if ! $SENT_AUTH && tail -50 "$LATEST_LOG" | grep -q "No server tokens configured"; then
+        echo "[AUTH] Server needs authentication, configuring persistence and sending auth command..."
+        sleep 3
+        # First, set auth persistence to Encrypted
+        tmux send-keys -t "$SESSION_NAME" "/auth persistence Encrypted" C-m
+        sleep 1
+        # Then send the auth login command
+        tmux send-keys -t "$SESSION_NAME" "/auth login device" C-m
         SENT_AUTH=true
-        echo "[AUTH] Auth command sent. Watch logs for the authentication URL."
+        echo "[AUTH] Auth commands sent. Waiting for authentication URL..."
       fi
       
       # Check if authentication URL was generated
@@ -374,79 +359,44 @@ monitor_and_auth() {
           echo "Visit: $AUTH_URL"
           echo "=========================================="
           echo ""
+          return 0
         fi
-        
-        # Monitor for successful authentication
-        while kill -0 $SERVER_PID 2>/dev/null; do
-          sleep 5
-          LATEST_LOG=$(ls -t "$LOGS_DIR"/*.log 2>/dev/null | head -1)
-          if [ -n "$LATEST_LOG" ]; then
-            LAST_30=$(tail -30 "$LATEST_LOG")
-            # If we see the server continuing past auth without errors
-            if echo "$LAST_30" | grep -qE "Loading assets|Setup phase completed"; then
-              if ! echo "$LAST_30" | grep -q "No server tokens configured"; then
-                touch "$SCRIPT_DIR/.authenticated"
-                echo "[AUTH] Authentication successful!"
-                echo "[AUTH] File created: $SCRIPT_DIR/.authenticated"
-                return 0
-              fi
-            fi
-          fi
-        done
       fi
     fi
     sleep 2
   done
 }
 
-# Check if this is the first run (no auth token file exists)
-FIRST_RUN=false
-if [ ! -f "$SCRIPT_DIR/.authenticated" ]; then
-  FIRST_RUN=true
-fi
+# Always start auth monitor in background
+monitor_and_auth &
+MONITOR_PID=$!
 
-while true; do
-  echo "Starting Hytale Server..."
-  
-  if [ "$FIRST_RUN" = true ]; then
-    # First run: start server and monitor for auth
-    java -jar HytaleServer.jar --assets Assets.zip &
-    SERVER_PID=$!
-    
-    # Monitor in background
-    monitor_and_auth $SERVER_PID &
-    MONITOR_PID=$!
-    
-    # Wait for server to finish
-    wait $SERVER_PID
-    
-    # Kill monitor if still running
-    kill $MONITOR_PID 2>/dev/null || true
-    
-    # Check if authentication was successful
-    if [ -f "$SCRIPT_DIR/.authenticated" ]; then
-      FIRST_RUN=false
-      echo "[INFO] Server authenticated successfully"
-    else
-      echo "[WARN] Authentication may not be complete."
-      echo "[WARN] If you completed auth, create the file manually:"
-      echo "       touch $SCRIPT_DIR/.authenticated"
-    fi
-  else
-    # Subsequent runs: just start the server normally
-    java -jar HytaleServer.jar --assets Assets.zip
-  fi
-  
-  echo "Server stopped. Restarting in 5 seconds..."
+# Kill any existing tmux session
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+
+# Start server in tmux session
+tmux new-session -d -s "$SESSION_NAME" "cd '$SCRIPT_DIR' && java -jar HytaleServer.jar --assets Assets.zip"
+
+echo "[INFO] Hytale server started in tmux session: $SESSION_NAME"
+echo "[INFO] Attach with: tmux attach -t $SESSION_NAME"
+echo "[INFO] Detach with: Ctrl+B then D"
+
+# Keep the script running by monitoring the tmux session
+while tmux has-session -t "$SESSION_NAME" 2>/dev/null; do
   sleep 5
 done
+
+# Clean up monitor if it's still running
+kill $MONITOR_PID 2>/dev/null || true
+
+echo "[INFO] Tmux session ended. Server stopped."
 EOF
 
 
 chmod +x "$SERVER_DIR/start.sh"
 echo -e "${GREEN}Start script created at $SERVER_DIR/start.sh.${NC}"
 
-echo -e "${CYAN}[6/8]${NC} Creating systemd service..."
+echo -e "${CYAN}[6/7]${NC} Creating systemd service..."
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
 Description=Hytale Dedicated Server
@@ -467,20 +417,14 @@ WantedBy=multi-user.target
 EOF
 
 
-echo -e "${BLUE}Reloading systemd, enabling and starting service...${NC}"
+echo -e "${BLUE}Reloading systemd and enabling service...${NC}"
 sudo systemctl daemon-reload
 sudo systemctl enable hytale
-sudo systemctl start hytale
-if systemctl is-active --quiet hytale; then
-  echo -e "${GREEN}Hytale service started successfully.${NC}"
-else
-  echo -e "${RED}Hytale service failed to start.${NC}" >&2
-  exit 1
-fi
+echo -e "${GREEN}Hytale service enabled (will start on boot).${NC}"
 
 
 # ---- 7. Open firewall (UDP / QUIC) ----
-echo -e "${CYAN}[7/8]${NC} Configuring firewall..."
+echo -e "${CYAN}[7/7]${NC} Configuring firewall..."
 if command -v ufw >/dev/null 2>&1; then
   echo -e "${BLUE}Configuring UFW firewall...${NC}"
   sudo ufw allow ${CUSTOM_PORT}/udp
@@ -498,69 +442,142 @@ echo -e "${GREEN}Service restart cron job set.${NC}"
 
 # ---- DONE ----
 echo ""
-echo -e "${CYAN}[9/9]${NC} Finalizing installation..."
+echo -e "${CYAN}[8/8]${NC} Finalizing installation..."
 
 # Get server IPv4 address
 SERVER_IP=$(hostname -I | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
 
-echo "Waiting for server to start and generate authentication URL..."
-AUTH_URL=""
-for i in {1..6}; do
-  sleep 10
-  # Get auth URL from the latest log file
-  if [ -d "$SERVER_DIR/logs" ]; then
-    LATEST_LOG=$(ls -t "$SERVER_DIR/logs"/*.log 2>/dev/null | head -1)
-    if [ -n "$LATEST_LOG" ]; then
-      AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
-    fi
-  fi
-  
-  if [ -n "$AUTH_URL" ]; then
-    break
-  fi
-  echo "Still waiting... ($((i*10))s)"
-done
-
 echo "=========================================="
 echo "INSTALL COMPLETE!"
 echo ""
-if [ -n "$AUTH_URL" ]; then
-  echo "AUTHENTICATION REQUIRED:"
-  echo "Visit: $AUTH_URL"
-  echo ""
-else
-  echo "The server will automatically send '/auth login device' when it starts."
-  echo ""
-  echo "Watch the logs for the authentication URL:"
-  echo "   journalctl -u hytale -f --no-pager -o cat"
-  echo "   OR"
-  echo "   tail -f $SERVER_DIR/logs/*.log"
-  echo ""
-fi
+echo -e "${YELLOW}Server is NOT started automatically.${NC}"
+echo -e "${YELLOW}Start it with: ./installer.sh start${NC}"
+echo ""
 echo "NEXT STEPS:"
-echo "1) Complete authentication using the URL above (or in logs)"
-echo "   - The .authenticated file will be created automatically after successful auth"
-echo "   - If auto-creation fails, manually create it with:"
-echo "     touch $SERVER_DIR/.authenticated"
 echo ""
-echo "2) Manage the service:"
-echo "   sudo systemctl status hytale"
-echo "   sudo systemctl restart hytale"
+echo "1) Start the server:"
+echo "   ./installer.sh start"
 echo ""
-echo "3) View logs:"
-echo "   tail -f $SERVER_DIR/logs/*.log"
+echo "2) Attach to server console:"
+echo "   ./installer.sh console"
+echo "   (Detach: Ctrl+B then D)"
 echo ""
-echo "4) Check authentication status:"
-echo "   ls -la $SERVER_DIR/.authenticated"
-echo "   Note: File location is $SERVER_DIR/.authenticated (lowercase 'server')"
+echo "3) Manage the service:"
+echo "   ./installer.sh start|stop"
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"
 echo "IP Address: $SERVER_IP:$CUSTOM_PORT"
 echo "Server Directory: $SERVER_DIR"
-echo "Logs Directory: $SERVER_DIR/logs"
-echo "Auto-restart: Every 3 days"
+echo "Tmux Session: hytale-server"
 echo "=========================================="
+}
+
+# Start server function
+start_server() {
+  echo ""
+  echo -e "${CYAN}Starting Hytale server...${NC}"
+  
+  if ! systemctl list-unit-files | grep -q hytale.service; then
+    echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
+    echo -e "${YELLOW}Please install it first.${NC}"
+    exit 1
+  fi
+  
+  if systemctl is-active --quiet hytale 2>/dev/null; then
+    echo -e "${YELLOW}Server is already running.${NC}"
+    exit 0
+  fi
+  
+  sudo systemctl start hytale
+  
+  if systemctl is-active --quiet hytale; then
+    echo -e "${GREEN}Hytale server started successfully.${NC}"
+    echo ""
+    
+    # Only wait for authentication URL if auth.enc doesn't exist (first start)
+    if [ ! -f "$SERVER_DIR/auth.enc" ]; then
+      echo "Waiting for authentication URL..."
+      sleep 5
+      
+      # Try to get auth URL from logs
+      if [ -d "$SERVER_DIR/logs" ]; then
+        for i in {1..6}; do
+          LATEST_LOG=$(ls -t "$SERVER_DIR/logs"/*.log 2>/dev/null | head -1)
+          if [ -n "$LATEST_LOG" ]; then
+            AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
+            if [ -n "$AUTH_URL" ]; then
+              echo ""
+              echo "=========================================="
+              echo "AUTHENTICATION REQUIRED:"
+              echo "Visit: $AUTH_URL"
+              echo "=========================================="
+              echo ""
+              break
+            fi
+          fi
+          sleep 5
+        done
+      fi
+    fi
+    
+    echo "Attach to console: ./installer.sh console"
+  else
+    echo -e "${RED}Failed to start Hytale server.${NC}" >&2
+    exit 1
+  fi
+}
+
+# Stop server function
+stop_server() {
+  echo ""
+  echo -e "${CYAN}Stopping Hytale server...${NC}"
+  
+  if ! systemctl list-unit-files | grep -q hytale.service; then
+    echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
+    exit 1
+  fi
+  
+  if ! systemctl is-active --quiet hytale 2>/dev/null; then
+    echo -e "${YELLOW}Server is not running.${NC}"
+    exit 0
+  fi
+  
+  sudo systemctl stop hytale
+  echo -e "${GREEN}Hytale server stopped.${NC}"
+}
+
+# Console attachment function
+attach_console() {
+  echo ""
+  if ! tmux has-session -t hytale-server 2>/dev/null; then
+    echo -e "${RED}Error: Hytale server console session not found.${NC}"
+    echo -e "${YELLOW}Is the server running? Check with: systemctl status hytale${NC}"
+    exit 1
+  fi
+  
+  echo -e "${CYAN}Attaching to Hytale server console...${NC}"
+  echo -e "${YELLOW}Press Ctrl+B then D to detach${NC}"
+  sleep 5
+  tmux attach -t hytale-server
+}
+
+# Show usage information
+show_usage() {
+  echo -e "${CYAN}Hytale Dedicated Server Manager${NC}"
+  echo ""
+  echo "Usage: $0 [command]"
+  echo ""
+  echo "Commands:"
+  echo "  install    - Install Hytale server"
+  echo "  start      - Start Hytale server"
+  echo "  stop       - Stop Hytale server"
+  echo "  update     - Update Hytale server"
+  echo "  uninstall  - Uninstall Hytale server"
+  echo "  console    - Attach to server console"
+  echo "  show       - Show interactive menu"
+  echo ""
+  echo "Run without arguments to use interactive menu."
 }
 
 
@@ -576,4 +593,42 @@ NC='\033[0m' # No Color
 
 
 # ================= MAIN =================
-show_menu
+# Parse command line arguments
+if [ $# -eq 0 ]; then
+  # No arguments, show interactive menu
+  show_usage
+else
+  # Handle command line argument
+  case "$1" in
+    install)
+      install_server
+      ;;
+    start)
+      start_server
+      ;;
+    stop)
+      stop_server
+      ;;
+    update)
+      update_server
+      ;;
+    uninstall)
+      uninstall_server
+      ;;
+    console)
+      attach_console
+      ;;
+    show)
+      show_menu
+      ;;
+    help|--help|-h)
+      show_usage
+      ;;
+    *)
+      echo -e "${RED}Error: Unknown command '$1'${NC}"
+      echo ""
+      show_usage
+      exit 1
+      ;;
+  esac
+fi

@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Source color definitions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/helper.sh"
+
 # ================= CONFIG =================
 USER_NAME=$(whoami)
 BASE_DIR="$(pwd)/hytale_server"
@@ -11,15 +15,16 @@ RESTART_CRON="0 0 */3 * * /usr/bin/systemctl restart hytale"
 PORT=5520
 # =========================================
 
+
 show_menu() {
-  echo "=========================================="
-  echo "   Hytale Dedicated Server Manager"
-  echo "=========================================="
+  echo -e "${CYAN}==========================================${NC}"
+  echo -e "${BOLD}${CYAN}   Hytale Dedicated Server Manager${NC}"
+  echo -e "${CYAN}==========================================${NC}"
   echo ""
-  echo "1) Install Hytale Server"
-  echo "2) Update Hytale Server"
-  echo "3) Uninstall Hytale Server"
-  echo "4) Exit"
+  echo -e "${BLUE}1)${NC} Install Hytale Server"
+  echo -e "${BLUE}2)${NC} Update Hytale Server"
+  echo -e "${BLUE}3)${NC} Uninstall Hytale Server"
+  echo -e "${BLUE}4)${NC} Exit"
   echo ""
   read -p "Select an option [1-4]: " choice
   
@@ -27,103 +32,107 @@ show_menu() {
     1) install_server ;;
     2) update_server ;;
     3) uninstall_server ;;
-    4) echo "Exiting..."; exit 0 ;;
-    *) echo "Invalid option. Please try again."; show_menu ;;
+    4) echo -e "${CYAN}Exiting...${NC}"; exit 0 ;;
+    *) echo -e "${RED}Invalid option. Please try again.${NC}"; show_menu ;;
   esac
 }
 
 uninstall_server() {
   echo ""
-  echo "=== Uninstalling Hytale Server ==="
+  echo -e "${BOLD}${YELLOW}=== Uninstalling Hytale Server ===${NC}"
   echo ""
+  
+  # Use default port if CUSTOM_PORT is not set
+  UNINSTALL_PORT=${CUSTOM_PORT:-$PORT}
   
   # Stop and disable service
   if systemctl is-active --quiet hytale 2>/dev/null; then
-    echo "Stopping Hytale service..."
+    echo -e "${BLUE}Stopping Hytale service...${NC}"
     sudo systemctl stop hytale
   fi
   
   if systemctl is-enabled --quiet hytale 2>/dev/null; then
-    echo "Disabling Hytale service..."
+    echo -e "${BLUE}Disabling Hytale service...${NC}"
     sudo systemctl disable hytale
   fi
   
   # Remove service file
   if [ -f "$SERVICE_FILE" ]; then
-    echo "Removing service file..."
+    echo -e "${BLUE}Removing service file...${NC}"
     sudo rm -f "$SERVICE_FILE"
     sudo systemctl daemon-reload
   fi
   
   # Remove cron job
-  echo "Removing cron job..."
+  echo -e "${BLUE}Removing cron job...${NC}"
   ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ) | sudo crontab - 2>/dev/null || true
   
   # Remove server files
   if [ -d "$BASE_DIR" ]; then
-    echo "Removing server files from $BASE_DIR..."
+    echo -e "${BLUE}Removing server files from $BASE_DIR...${NC}"
     rm -rf "$BASE_DIR"
   fi
   
   # Remove firewall rule
   if command -v ufw >/dev/null 2>&1; then
-    echo "Removing firewall rule..."
-    sudo ufw delete allow ${PORT}/udp 2>/dev/null || true
+    echo -e "${BLUE}Removing firewall rule...${NC}"
+    sudo ufw delete allow ${UNINSTALL_PORT}/udp 2>/dev/null || true
   fi
   
   echo ""
-  echo "=========================================="
-  echo "Uninstall complete!"
-  echo "=========================================="
+  echo -e "${GREEN}==========================================${NC}"
+  echo -e "${BOLD}${GREEN}Uninstall complete!${NC}"
+  echo -e "${GREEN}==========================================${NC}"
 }
 
 update_server() {
   echo ""
-  echo "=== Updating Hytale Server ==="
+  echo -e "${BOLD}${YELLOW}=== Updating Hytale Server ===${NC}"
   echo ""
   
   # Check if server is installed
   if ! systemctl list-unit-files | grep -q hytale.service; then
-    echo "ERROR: Hytale server is not installed."
-    echo "Please install it first using option 1."
+    echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
+    echo -e "${YELLOW}Please install it first using option 1.${NC}"
     exit 1
   fi
   
-  echo "[1/5] Stopping Hytale service..."
+  echo -e "${CYAN}[1/5]${NC} Stopping Hytale service..."
   sudo systemctl stop hytale
   
-  echo "[2/5] Downloading Hytale Downloader..."
-  cd "$BASE_DIR" || { echo "Failed to change to $BASE_DIR." >&2; exit 1; }
+  echo -e "${CYAN}[2/5]${NC} Downloading Hytale Downloader..."
+  cd "$BASE_DIR" || { echo -e "${RED}Failed to change to $BASE_DIR.${NC}" >&2; exit 1; }
   
   if [ ! -f "hytale-downloader-linux-amd64" ]; then
-    if wget --no-cookies --no-cache -O hytale-downloader.zip "$DOWNLOADER_URL"; then
-      if unzip -o hytale-downloader.zip; then
+    if wget --no-cookies --no-cache --show-progress -O hytale-downloader.zip "$DOWNLOADER_URL"; then
+      if unzip -q hytale-downloader.zip; then
         chmod +x hytale-downloader-linux-amd64
         rm -f hytale-downloader-windows-amd64.exe hytale-downloader.zip
       fi
     fi
   fi
   
-  echo "[3/5] Downloading latest server files..."
+  echo -e "${CYAN}[3/5]${NC} Downloading latest server files..."
   if ./hytale-downloader-linux-amd64; then
-    echo "Server files downloaded."
+    echo -e "${GREEN}Server files downloaded.${NC}"
   else
-    echo "Failed to download server files." >&2
+    echo -e "${RED}Failed to download server files.${NC}" >&2
     exit 1
   fi
   
   DOWNLOADED_ZIP=$(ls -t *.zip 2>/dev/null | head -1)
   
   if [ -z "$DOWNLOADED_ZIP" ]; then
-    echo "No zip file found after download." >&2
+    echo -e "${RED}No zip file found after download.${NC}" >&2
     exit 1
   fi
   
-  echo "[4/5] Extracting and updating server files..."
-  if unzip -o "$DOWNLOADED_ZIP"; then
-    echo "Extraction complete."
+  echo -e "${CYAN}[4/5]${NC} Extracting and updating server files..."
+  echo -e "${BLUE}Extracting files:${NC}"
+  if unzip -o "$DOWNLOADED_ZIP" | grep -E "(inflating|extracting):" | sed "s/^/  ${CYAN}→${NC} /"; then
+    echo -e "${GREEN}✓ Extraction complete.${NC}"
   else
-    echo "Failed to extract server files." >&2
+    echo -e "${RED}Failed to extract server files.${NC}" >&2
     exit 1
   fi
   
@@ -143,84 +152,115 @@ update_server() {
   rm -f Assets.zip
   rm -f QUICKSTART.md
   
-  echo "[5/5] Starting Hytale service..."
+  echo -e "${CYAN}[5/5]${NC} Starting Hytale service..."
   sudo systemctl start hytale
   
   echo ""
-  echo "=========================================="
-  echo "Update complete!"
-  echo "Check logs with: journalctl -u hytale -f"
-  echo "=========================================="
+  echo -e "${GREEN}==========================================${NC}"
+  echo -e "${BOLD}${GREEN}Update complete!${NC}"
+  echo -e "${BLUE}Check logs with: ${NC}journalctl -u hytale -f"
+  echo -e "${GREEN}==========================================${NC}"
 }
 
 install_server() {
   echo ""
-  echo "=== Installing Hytale Dedicated Server ==="
+  echo -e "${BOLD}${CYAN}=== Installing Hytale Dedicated Server ===${NC}"
   echo ""
   
   # Check if already installed
   if systemctl is-active --quiet hytale 2>/dev/null; then
-    echo "WARNING: Hytale service is already running!"
-    echo "Please uninstall first using option 3."
+    echo -e "${YELLOW}WARNING: Hytale service is already running!${NC}"
+    echo -e "${YELLOW}Please uninstall first using option 3.${NC}"
     exit 1
   fi
 
-echo "[1/8] Checking dependencies..."
+  # Port configuration
+  echo -e "${CYAN}Port Configuration${NC}"
+  read -p "Enter server port (default: 5520): " CUSTOM_PORT
+  
+  if [ -z "$CUSTOM_PORT" ]; then
+    CUSTOM_PORT=$PORT
+    echo -e "${BLUE}Using default port: ${CUSTOM_PORT}${NC}"
+  else
+    # Validate port number
+    if ! [[ "$CUSTOM_PORT" =~ ^[0-9]+$ ]] || [ "$CUSTOM_PORT" -lt 1024 ] || [ "$CUSTOM_PORT" -gt 65535 ]; then
+      echo -e "${RED}Invalid port number. Must be between 1024 and 65535.${NC}"
+      exit 1
+    fi
+    echo -e "${GREEN}Using custom port: ${CUSTOM_PORT}${NC}"
+  fi
+  echo ""
+
+echo -e "${CYAN}[1/8]${NC} Checking dependencies..."
 
 # Check and install unzip if missing
 if ! command -v unzip >/dev/null 2>&1; then
-  echo "Installing unzip..."
+  echo -e "${BLUE}Installing unzip...${NC}"
   sudo apt-get update -qq
   sudo apt-get install -y unzip
-  echo "✓ unzip installed."
+  echo -e "${GREEN}✓ unzip installed.${NC}"
 else
-  echo "✓ unzip is already installed."
+  echo -e "${GREEN}✓ unzip is already installed.${NC}"
 fi
 
-echo "Checking Java installation..."
+echo -e "${BLUE}Checking Java installation...${NC}"
 JAVA_VERSION_OUTPUT=$(java -version 2>&1 || true)
 JAVA_VERSION=$(echo "$JAVA_VERSION_OUTPUT" | awk -F[\".] '/version/ {print $2}')
 
 if [[ "$JAVA_VERSION_OUTPUT" == *"25."* || "$JAVA_VERSION" == "25" ]]; then
-  echo "✓ Java 25 is already installed."
+  echo -e "${GREEN}✓ Java 25 is already installed.${NC}"
 else
-  echo "Installing Java 25..."
+  echo -e "${BLUE}Installing Java 25...${NC}"
   if wget --no-cookies --no-cache -q --show-progress https://download.oracle.com/java/25/latest/jdk-25_linux-x64_bin.deb; then
     if sudo dpkg -i jdk-25_linux-x64_bin.deb; then
-      echo "✓ Java 25 installed successfully."
+      echo -e "${GREEN}✓ Java 25 installed successfully.${NC}"
       rm jdk-25_linux-x64_bin.deb
     else
-      echo "Failed to install Java." >&2
+      echo -e "${RED}Failed to install Java.${NC}" >&2
       exit 1
     fi
   else
-    echo "Failed to download Java installer." >&2
+    echo -e "${RED}Failed to download Java installer.${NC}" >&2
     exit 1
   fi
 fi
 
 java --version || { echo "Java not found in PATH." >&2; exit 1; }
 
+# Check available disk space
+echo -e "${BLUE}Checking available disk space...${NC}"
+REQUIRED_SPACE_MB=5120  # 5 GB in MB
+AVAILABLE_SPACE_MB=$(df -BM "$(pwd)" | awk 'NR==2 {print $4}' | sed 's/M//')
+
+if [ "$AVAILABLE_SPACE_MB" -lt "$REQUIRED_SPACE_MB" ]; then
+  echo -e "${RED}ERROR: Insufficient disk space.${NC}"
+  echo -e "${YELLOW}Required: ${REQUIRED_SPACE_MB} MB (5 GB)${NC}"
+  echo -e "${YELLOW}Available: ${AVAILABLE_SPACE_MB} MB${NC}"
+  exit 1
+else
+  echo -e "${GREEN}✓ Sufficient disk space available (${AVAILABLE_SPACE_MB} MB).${NC}"
+fi
+
 
 # ---- 2. Create directories ----
-echo "[2/8] Creating directories..."
+echo -e "${CYAN}[2/8]${NC} Creating directories..."
 mkdir -p "$SERVER_DIR"
 
 
 # ---- 3. Install Hytale Downloader CLI ----
-echo "[3/8] Downloading Hytale Downloader..."
+echo -e "${CYAN}[3/8]${NC} Downloading Hytale Downloader..."
 
-if wget --no-cookies --no-cache -O hytale-downloader.zip "$DOWNLOADER_URL"; then
-  echo "Hytale Downloader downloaded."
+if wget --no-cookies --no-cache --show-progress -O hytale-downloader.zip "$DOWNLOADER_URL"; then
+  echo -e "${GREEN}Hytale Downloader downloaded.${NC}"
 else
-  echo "Failed to download Hytale Downloader." >&2
+  echo -e "${RED}Failed to download Hytale Downloader.${NC}" >&2
   exit 1
 fi
-echo "Extracting Hytale Downloader..."
-if unzip -o hytale-downloader.zip; then
-  echo "✓ Extraction complete."
+echo -e "${BLUE}Extracting Hytale Downloader...${NC}"
+if unzip -q hytale-downloader.zip; then
+  echo -e "${GREEN}✓ Extraction complete.${NC}"
 else
-  echo "Failed to extract Hytale Downloader." >&2
+  echo -e "${RED}Failed to extract Hytale Downloader.${NC}" >&2
   exit 1
 fi
 
@@ -233,12 +273,12 @@ fi
 
 
 # ---- 4. Download server files ----
-echo "[4/8] Downloading Hytale server files..."
-cd "$BASE_DIR" || { echo "Failed to change to $BASE_DIR." >&2; exit 1; }
+echo -e "${CYAN}[4/8]${NC} Downloading Hytale server files..."
+cd "$BASE_DIR" || { echo -e "${RED}Failed to change to $BASE_DIR.${NC}" >&2; exit 1; }
 if ./hytale-downloader-linux-amd64; then
-  echo "Server files downloaded."
+  echo -e "${GREEN}Server files downloaded.${NC}"
 else
-  echo "Failed to download server files." >&2
+  echo -e "${RED}Failed to download server files.${NC}" >&2
   exit 1
 fi
 
@@ -247,45 +287,52 @@ fi
 DOWNLOADED_ZIP=$(ls -t *.zip 2>/dev/null | head -1)
 
 if [ -z "$DOWNLOADED_ZIP" ]; then
-  echo "No zip file found after download." >&2
+  echo -e "${RED}No zip file found after download.${NC}" >&2
   exit 1
 fi
 
-echo "Extracting $DOWNLOADED_ZIP..."
-if unzip -o "$DOWNLOADED_ZIP"; then
-  echo "Extraction complete."
+echo -e "${BLUE}Extracting $DOWNLOADED_ZIP...${NC}"
+echo -e "${BLUE}Extracting files:${NC}"
+if unzip -o "$DOWNLOADED_ZIP" | grep -E "(inflating|extracting):" | sed "s/^/  ${CYAN}→${NC} /"; then
+  echo -e "${GREEN}✓ Extraction complete.${NC}"
 else
-  echo "Failed to extract server files." >&2
+  echo -e "${RED}Failed to extract server files.${NC}" >&2
   exit 1
 fi
 
 # Expected structure after extraction: Server/ Assets.zip
-echo "Copying server files to $SERVER_DIR..."
+echo -e "${BLUE}Copying server files to $SERVER_DIR...${NC}"
 if [ -d "Server" ]; then
-  cp -r Server/* "$SERVER_DIR/" || { echo "Failed to copy server files." >&2; exit 1; }
+  FILE_COUNT=$(find Server -type f | wc -l)
+  echo -e "${BLUE}Copying ${FILE_COUNT} files...${NC}"
+  cp -rv Server/* "$SERVER_DIR/" 2>&1 | grep -v "^'" | sed "s/^/  ${CYAN}→${NC} /" || { echo -e "${RED}Failed to copy server files.${NC}" >&2; exit 1; }
+  echo -e "${GREEN}✓ Server files copied.${NC}"
 else
-  echo "Server directory not found after extraction." >&2
+  echo -e "${RED}Server directory not found after extraction.${NC}" >&2
   exit 1
 fi
 
 if [ -f "Assets.zip" ]; then
-  cp "Assets.zip" "$SERVER_DIR/" || { echo "Failed to copy Assets.zip." >&2; exit 1; }
+  ASSETS_SIZE=$(du -h Assets.zip | cut -f1)
+  echo -e "${BLUE}Copying Assets.zip (${ASSETS_SIZE})...${NC}"
+  cp "Assets.zip" "$SERVER_DIR/" || { echo -e "${RED}Failed to copy Assets.zip.${NC}" >&2; exit 1; }
+  echo -e "${GREEN}✓ Assets.zip copied.${NC}"
 else
-  echo "Assets.zip not found after extraction." >&2
+  echo -e "${RED}Assets.zip not found after extraction.${NC}" >&2
   exit 1
 fi
 
 # Clean up temporary files
-echo "Cleaning up temporary files..."
+echo -e "${BLUE}Cleaning up temporary files...${NC}"
 rm -f "$DOWNLOADED_ZIP"
 rm -rf Server
 rm -f Assets.zip
 rm -f QUICKSTART.md
 
-echo "[5/8] Installing dependencies and creating server start script..."
+echo -e "${CYAN}[5/8]${NC} Installing dependencies and creating server start script..."
 # Install expect if not already installed
 if ! command -v expect >/dev/null 2>&1; then
-  echo "Installing expect..."
+  echo -e "${BLUE}Installing expect...${NC}"
   sudo apt-get update -qq
   sudo apt-get install -y expect
 fi
@@ -318,9 +365,9 @@ EOF
 
 
 chmod +x "$SERVER_DIR/start.sh"
-echo "Start script created at $SERVER_DIR/start.sh."
+echo -e "${GREEN}Start script created at $SERVER_DIR/start.sh.${NC}"
 
-echo "[6/8] Creating systemd service..."
+echo -e "${CYAN}[6/8]${NC} Creating systemd service..."
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
 Description=Hytale Dedicated Server
@@ -341,41 +388,41 @@ WantedBy=multi-user.target
 EOF
 
 
-echo "Reloading systemd, enabling and starting service..."
+echo -e "${BLUE}Reloading systemd, enabling and starting service...${NC}"
 sudo systemctl daemon-reload
 sudo systemctl enable hytale
 sudo systemctl start hytale
 if systemctl is-active --quiet hytale; then
-  echo "Hytale service started successfully."
+  echo -e "${GREEN}Hytale service started successfully.${NC}"
 else
-  echo "Hytale service failed to start." >&2
+  echo -e "${RED}Hytale service failed to start.${NC}" >&2
   exit 1
 fi
 
 
 # ---- 7. Open firewall (UDP / QUIC) ----
-echo "[7/8] Configuring firewall..."
+echo -e "${CYAN}[7/8]${NC} Configuring firewall..."
 if command -v ufw >/dev/null 2>&1; then
-  echo "Configuring UFW firewall..."
-  sudo ufw allow ${PORT}/udp
-  echo "UFW rule added for UDP port ${PORT}."
+  echo -e "${BLUE}Configuring UFW firewall...${NC}"
+  sudo ufw allow ${CUSTOM_PORT}/udp
+  echo -e "${GREEN}UFW rule added for UDP port ${CUSTOM_PORT}.${NC}"
 else
-  echo "UFW not found. Please ensure UDP port ${PORT} is open."
+  echo -e "${YELLOW}UFW not found. Please ensure UDP port ${CUSTOM_PORT} is open.${NC}"
 fi
 
 
 # ---- 8. Schedule 3-day service restart ----
-echo "[8/8] Scheduling automatic service restart every 3 days..."
+echo -e "${CYAN}[8/8]${NC} Scheduling automatic service restart every 3 days..."
 ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab -
-echo "Service restart cron job set."
+echo -e "${GREEN}Service restart cron job set.${NC}"
 
 
 # ---- DONE ----
 echo ""
-echo "[9/9] Finalizing installation..."
+echo -e "${CYAN}[9/9]${NC} Finalizing installation..."
 
 # Get server IPv4 address
-SERVER_IP=$(curl -4 -s --max-time 5 ifconfig.me || curl -4 -s --max-time 5 icanhazip.com || hostname -I | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
+SERVER_IP=$(hostname -I | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
 
 echo "Waiting for server to start and generate authentication URL..."
 AUTH_URL=""
@@ -414,7 +461,7 @@ echo "   journalctl -u hytale -f"
 echo ""
 echo "=========================================="
 echo "SERVER DETAILS:"
-echo "IP Address: $SERVER_IP:$PORT"
+echo "IP Address: $SERVER_IP:$CUSTOM_PORT"
 echo "Auto-restart: Every 3 days"
 echo "=========================================="
 }

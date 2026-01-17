@@ -25,14 +25,17 @@ That's it! Visit the authentication URL when prompted.
 | `./Hytale-Server install` | Install Hytale server |
 | `./Hytale-Server start` | Start the server |
 | `./Hytale-Server stop` | Stop the server |
+| `./Hytale-Server status` | Show server status & configuration |
 | `./Hytale-Server console` | Open server console |
+| `./Hytale-Server logs` | View live server logs |
 | `./Hytale-Server update` | Update to latest version |
 | `./Hytale-Server backup` | Create manual backup |
 | `./Hytale-Server restore` | Restore from backup |
 | `./Hytale-Server autobackup` | Toggle automatic backups |
+| `./Hytale-Server autorestart` | Toggle automatic restarts |
 | `./Hytale-Server uninstall` | Remove completely |
 
-💡 Run `./Hytale-Server` without arguments for an interactive menu.
+💡 Run `./Hytale-Server` without arguments to show all commands.
 
 ---
 
@@ -42,14 +45,26 @@ That's it! Visit the authentication URL when prompted.
 - 🔐 **Auto Authentication** - OAuth login with encrypted persistence
 - 🖥️ **Tmux Console** - Persistent console access (detach with `Ctrl+B` then `D`)
 - 🚀 **Systemd Service** - Auto-start on boot, automatic restarts
-- � **Smart Backups** - Manual & automatic backups with retention management
+- 💾 **Smart Backups** - Manual & automatic backups with retention management
 - 🔄 **Easy Restore** - Quick world restoration from backup archives
-- �🔥 **Firewall Setup** - Automatic UFW configuration
+- 🔥 **Firewall Setup** - Automatic UFW configuration
 - ⚙️ **Custom Ports** - Choose your own port during installation
+- ⏰ **Auto-Restart** - Optional scheduled server restarts every 3 days
+- 📊 **Status Monitoring** - View server status, logs, and configuration at a glance
 
 ---
 
-## 🔑 First Time Setup
+### Installation Prompts
+
+During installation, you'll be asked:
+
+1. **Server Port** - Choose a custom port or use default (5520)
+2. **Auto-Backup** - Enable daily backups at 2:00 AM (recommended)
+3. **Auto-Restart** - Enable server restart every 3 days at midnight (optional)
+
+### Start the Server
+
+Aetup
 
 Start the server after installation:
 
@@ -66,7 +81,7 @@ Authenticate **once** - your credentials persist across all restarts.
 
 ---
 
-## � Backup & Restore
+## 💾 Backup & Restore
 
 ### Manual Backup
 
@@ -117,8 +132,35 @@ Select from available backups - safety backup created automatically before resto
 | **Account** | Valid Hytale account |
 
 ### Supported Distributions
+### Quick Status Check
 
-| Distribution | Versions | Status |
+View server status, enabled features, and configuration:
+
+```bash
+./Hytale-Server status
+```
+
+**Shows:**
+- Server running/stopped state
+- Auto-start on boot status
+- Auto-backup enabled/disabled
+- Auto-restart enabled/disabled
+- Server IP and port
+- Backup count
+- Authentication status
+
+### Live Logs
+
+View server logs in real-time:
+
+```bash
+./Hytale-Server logs
+```
+
+### Other Monitoring Commands
+
+```bash
+# System journalion | Versions | Status |
 |--------------|----------|--------|
 | Ubuntu | 20.04, 22.04, 24.04 | ✅ |
 | Debian | 10, 11, 12, 13 | ✅ |

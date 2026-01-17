@@ -65,6 +65,11 @@ uninstall_server() {
     sudo ufw delete allow ${UNINSTALL_PORT}/udp 2>/dev/null || true
   fi
   
+  # Remove cron jobs
+  echo -e "${BLUE}Removing scheduled tasks...${NC}"
+  sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | grep -v "Hytale-Server backup" | sudo crontab - 2>/dev/null || true
+  echo -e "${GREEN}✓ Scheduled tasks removed${NC}"
+  
   echo ""
   echo -e "${GREEN}==========================================${NC}"
   echo -e "${BOLD}${GREEN}Uninstall complete!${NC}"
@@ -303,6 +308,43 @@ toggle_autobackup() {
   echo ""
   echo -e "${GREEN}===========================================${NC}"
 }
+
+toggle_autorestart() {
+  echo ""
+  echo -e "${BOLD}${YELLOW}=== Auto-Restart Configuration ===${NC}"
+  echo ""
+  
+  # Check if auto-restart cron exists
+  if sudo crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
+    echo -e "${YELLOW}Auto-restart is currently: ${BOLD}ENABLED${NC}"
+    echo ""
+    read -p "Do you want to disable auto-restart? (yes/no): " DISABLE
+    
+    if [ "$DISABLE" = "yes" ]; then
+      sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | sudo crontab -
+      echo -e "${GREEN}✓ Auto-restart disabled${NC}"
+    else
+      echo -e "${YELLOW}Auto-restart remains enabled${NC}"
+    fi
+  else
+    echo -e "${YELLOW}Auto-restart is currently: ${BOLD}DISABLED${NC}"
+    echo ""
+    echo -e "${CYAN}Configure automatic server restart every 3 days:${NC}"
+    read -p "Enable auto-restart? (yes/no): " ENABLE
+    
+    if [ "$ENABLE" = "yes" ]; then
+      ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab -
+      
+      echo -e "${GREEN}✓ Auto-restart enabled${NC}"
+      echo -e "${BLUE}Server will restart every 3 days at midnight${NC}"
+    else
+      echo -e "${YELLOW}Auto-restart remains disabled${NC}"
+    fi
+  fi
+  
+  echo ""
+  echo -e "${GREEN}===========================================${NC}"
+}
 update_server() {
   echo ""
   echo -e "${BOLD}${YELLOW}=== Updating Hytale Server ===${NC}"
@@ -417,6 +459,19 @@ install_server() {
     fi
     echo -e "${GREEN}Using custom port: ${CUSTOM_PORT}${NC}"
   fi
+  echo ""
+
+  # Auto-backup configuration
+  echo -e "${CYAN}Auto-Backup Configuration${NC}"
+  echo -e "${BLUE}Would you like to enable automatic daily backups?${NC}"
+  read -p "Enable auto-backup? (yes/no): " ENABLE_AUTOBACKUP
+  echo ""
+
+  # Auto-restart configuration
+  echo -e "${CYAN}Auto-Restart Configuration${NC}"
+  echo -e "${BLUE}Would you like to enable automatic server restart every 3 days?${NC}"
+  echo -e "${YELLOW}(Helps keep server running smoothly and apply updates)${NC}"
+  read -p "Enable auto-restart? (yes/no): " ENABLE_AUTORESTART
   echo ""
 
 echo -e "${CYAN}[1/7]${NC} Checking dependencies..."
@@ -690,15 +745,37 @@ else
 fi
 
 
-# ---- 8. Schedule 3-day service restart ----
-echo -e "${CYAN}[8/8]${NC} Scheduling automatic service restart every 3 days..."
-( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab -
-echo -e "${GREEN}Service restart cron job set.${NC}"
+# ---- 8. Configure automatic tasks ----
+echo -e "${CYAN}[8/8]${NC} Configuring automatic tasks..."
+
+if [ "$ENABLE_AUTORESTART" = "yes" ]; then
+  echo -e "${BLUE}Setting up auto-restart...${NC}"
+  ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab -
+  echo -e "${GREEN}✓ Auto-restart enabled${NC}"
+  echo -e "${BLUE}  → Server will restart every 3 days at midnight${NC}"
+fi
+
+if [ "$ENABLE_AUTOBACKUP" = "yes" ]; then
+  echo -e "${BLUE}Setting up auto-backup...${NC}"
+  SCRIPT_PATH="$(realpath "$0")"
+  BACKUP_CRON_INSTALL="0 2 * * * $SCRIPT_PATH backup > /dev/null 2>&1"
+  
+  ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON_INSTALL" ) | sudo crontab -
+  
+  echo -e "${GREEN}✓ Auto-backup enabled${NC}"
+  echo -e "${BLUE}  → Backups will run daily at 2:00 AM${NC}"
+  echo -e "${BLUE}  → Retention: ${BACKUP_RETENTION} backups${NC}"
+fi
+
+if [ "$ENABLE_AUTORESTART" != "yes" ] && [ "$ENABLE_AUTOBACKUP" != "yes" ]; then
+  echo -e "${YELLOW}No automatic tasks configured.${NC}"
+  echo -e "${YELLOW}You can enable them later with: ./Hytale-Server autobackup${NC}"
+fi
 
 
 # ---- DONE ----
 echo ""
-echo -e "${CYAN}[8/8]${NC} Finalizing installation..."
+echo -e "${CYAN}Finalizing installation...${NC}"
 
 # Get server IPv4 address
 SERVER_IP=$(hostname -I | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
@@ -728,6 +805,112 @@ echo "Server Directory: $BASE_DIR"
 echo "Tools Directory: $TOOLS_DIR"
 echo "Tmux Session: hytale-server"
 echo "=========================================="
+}
+
+# Show server status
+show_status() {
+  echo ""
+  echo -e "${BOLD}${CYAN}=== Hytale Server Status ===${NC}"
+  echo ""
+  
+  # Check if installed
+  if ! systemctl list-unit-files | grep -q hytale.service; then
+    echo -e "${RED}Server: NOT INSTALLED${NC}"
+    echo ""
+    echo -e "${YELLOW}Run './Hytale-Server install' to install the server.${NC}"
+    return
+  fi
+  
+  # Server status
+  if systemctl is-active --quiet hytale 2>/dev/null; then
+    echo -e "${GREEN}Server Status: RUNNING ✓${NC}"
+  else
+    echo -e "${RED}Server Status: STOPPED ✗${NC}"
+  fi
+  
+  # Auto-start on boot
+  if systemctl is-enabled --quiet hytale 2>/dev/null; then
+    echo -e "${GREEN}Auto-start: ENABLED ✓${NC}"
+  else
+    echo -e "${YELLOW}Auto-start: DISABLED ✗${NC}"
+  fi
+  
+  echo ""
+  echo -e "${BOLD}${CYAN}Scheduled Tasks:${NC}"
+  
+  # Auto-backup status
+  if sudo crontab -l 2>/dev/null | grep -q "Hytale-Server backup"; then
+    echo -e "${GREEN}Auto-backup: ENABLED ✓${NC}"
+    echo -e "${BLUE}  → Daily at 2:00 AM${NC}"
+    echo -e "${BLUE}  → Retention: ${BACKUP_RETENTION} backups${NC}"
+  else
+    echo -e "${YELLOW}Auto-backup: DISABLED ✗${NC}"
+  fi
+  
+  # Auto-restart status
+  if sudo crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
+    echo -e "${GREEN}Auto-restart: ENABLED ✓${NC}"
+    echo -e "${BLUE}  → Every 3 days at midnight${NC}"
+  else
+    echo -e "${YELLOW}Auto-restart: DISABLED ✗${NC}"
+  fi
+  
+  echo ""
+  echo -e "${BOLD}${CYAN}Server Details:${NC}"
+  
+  if [ -d "$BASE_DIR" ]; then
+    # Get port from config if exists
+    if [ -f "$BASE_DIR/config.json" ] && command -v jq >/dev/null 2>&1; then
+      SERVER_PORT=$(jq -r '.server.port // empty' "$BASE_DIR/config.json" 2>/dev/null || echo "$PORT")
+    else
+      SERVER_PORT="$PORT"
+    fi
+    
+    SERVER_IP=$(hostname -I | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
+    echo -e "${BLUE}IP Address: ${SERVER_IP}:${SERVER_PORT}${NC}"
+    echo -e "${BLUE}Directory: $BASE_DIR${NC}"
+    
+    # Backup count
+    if [ -d "$BACKUP_DIR" ]; then
+      BACKUP_COUNT=$(ls -1 "$BACKUP_DIR"/hytale-backup-*.tar.gz 2>/dev/null | wc -l)
+      echo -e "${BLUE}Backups: ${BACKUP_COUNT}${NC}"
+    fi
+    
+    # Auth status
+    if [ -f "$BASE_DIR/auth.enc" ]; then
+      echo -e "${GREEN}Authentication: CONFIGURED ✓${NC}"
+    else
+      echo -e "${YELLOW}Authentication: PENDING ✗${NC}"
+    fi
+  fi
+  
+  echo ""
+  echo -e "${GREEN}===========================================${NC}"
+}
+
+# View server logs
+view_logs() {
+  echo ""
+  
+  if [ ! -d "$BASE_DIR/logs" ]; then
+    echo -e "${RED}Error: Logs directory not found.${NC}"
+    echo -e "${YELLOW}Has the server been started yet?${NC}"
+    exit 1
+  fi
+  
+  LATEST_LOG=$(ls -t "$BASE_DIR/logs"/*.log 2>/dev/null | head -1)
+  
+  if [ -z "$LATEST_LOG" ]; then
+    echo -e "${RED}Error: No log files found.${NC}"
+    exit 1
+  fi
+  
+  echo -e "${CYAN}Viewing latest log: $(basename "$LATEST_LOG")${NC}"
+  echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
+  echo ""
+  sleep 2
+  
+  tail -f "$LATEST_LOG"
 }
 
 # Start server function
@@ -826,18 +1009,20 @@ show_usage() {
   echo "Usage: $0 [command]"
   echo ""
   echo "Commands:"
-  echo "  install     - Install Hytale server"
-  echo "  start       - Start Hytale server"
-  echo "  stop        - Stop Hytale server"
-  echo "  update      - Update Hytale server"
-  echo "  uninstall   - Uninstall Hytale server"
-  echo "  console     - Attach to server console"
-  echo "  backup      - Create manual backup"
-  echo "  restore     - Restore from backup"
-  echo "  autobackup  - Toggle automatic backups"
-  echo "  show        - Show interactive menu"
+  echo "  install      - Install Hytale server"
+  echo "  start        - Start Hytale server"
+  echo "  stop         - Stop Hytale server"
+  echo "  update       - Update Hytale server"
+  echo "  uninstall    - Uninstall Hytale server"
+  echo "  status       - Show server status and configuration"
+  echo "  console      - Attach to server console"
+  echo "  logs         - View server logs (live tail)"
+  echo "  backup       - Create manual backup"
+  echo "  restore      - Restore from backup"
+  echo "  autobackup   - Toggle automatic backups"
+  echo "  autorestart  - Toggle automatic restarts"
   echo ""
-  echo "Run without arguments to use interactive menu."
+  echo "Run without arguments to show this help."
 }
 
 
@@ -887,8 +1072,14 @@ else
     autobackup)
       toggle_autobackup
       ;;
-    show)
-      show_menu
+    autorestart)
+      toggle_autorestart
+      ;;
+    status)
+      show_status
+      ;;
+    logs)
+      view_logs
       ;;
     help|--help|-h)
       show_usage

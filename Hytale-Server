@@ -67,7 +67,7 @@ uninstall_server() {
   
   # Remove cron jobs
   echo -e "${BLUE}Removing scheduled tasks...${NC}"
-  sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | grep -v "Hytale-Server backup" | sudo crontab - 2>/dev/null || true
+  sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | grep -v "backup > /dev/null" | sudo crontab - 2>/dev/null || true
   echo -e "${GREEN}✓ Scheduled tasks removed${NC}"
   
   echo ""
@@ -273,13 +273,13 @@ toggle_autobackup() {
   echo ""
   
   # Check if auto-backup cron exists
-  if sudo crontab -l 2>/dev/null | grep -q "Hytale-Server backup"; then
+  if sudo crontab -l 2>/dev/null | grep -q "backup > /dev/null"; then
     echo -e "${YELLOW}Auto-backup is currently: ${BOLD}ENABLED${NC}"
     echo ""
     read -p "Do you want to disable auto-backup? (yes/no): " DISABLE
     
     if [ "$DISABLE" = "yes" ]; then
-      sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" | sudo crontab - || true
+      sudo crontab -l 2>/dev/null | grep -v "backup > /dev/null" | sudo crontab - || true
       echo -e "${GREEN}✓ Auto-backup disabled${NC}"
     else
       echo -e "${YELLOW}Auto-backup remains enabled${NC}"
@@ -295,7 +295,7 @@ toggle_autobackup() {
       SCRIPT_PATH="$(realpath "$0")"
       BACKUP_CRON="0 2 * * * $SCRIPT_PATH backup > /dev/null 2>&1"
       
-      ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON" ) | sudo crontab - || true
+      ( sudo crontab -l 2>/dev/null | grep -v "backup > /dev/null" ; echo "$BACKUP_CRON" ) | sudo crontab - || true
       
       echo -e "${GREEN}✓ Auto-backup enabled${NC}"
       echo -e "${BLUE}Backups will run daily at 2:00 AM${NC}"
@@ -760,7 +760,7 @@ if [ "$ENABLE_AUTOBACKUP" = "yes" ]; then
   SCRIPT_PATH="$(realpath "$0")"
   BACKUP_CRON_INSTALL="0 2 * * * $SCRIPT_PATH backup > /dev/null 2>&1"
   
-  ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON_INSTALL" ) | sudo crontab - || true
+  ( sudo crontab -l 2>/dev/null | grep -v "backup > /dev/null" ; echo "$BACKUP_CRON_INSTALL" ) | sudo crontab - || true
   
   echo -e "${GREEN}✓ Auto-backup enabled${NC}"
   echo -e "${BLUE}  → Backups will run daily at 2:00 AM${NC}"
@@ -839,10 +839,33 @@ show_status() {
   echo -e "${BOLD}${CYAN}Scheduled Tasks:${NC}"
   
   # Auto-backup status
-  if sudo crontab -l 2>/dev/null | grep -q "Hytale-Server backup"; then
+  if sudo crontab -l 2>/dev/null | grep -q "backup > /dev/null"; then
     echo -e "${GREEN}Auto-backup: ENABLED ✓${NC}"
     echo -e "${BLUE}  → Daily at 2:00 AM${NC}"
     echo -e "${BLUE}  → Retention: ${BACKUP_RETENTION} backups${NC}"
+    
+    # Calculate time until next backup
+    CURRENT_HOUR=$(date +%H)
+    CURRENT_MIN=$(date +%M)
+    CURRENT_TIME_MIN=$((CURRENT_HOUR * 60 + CURRENT_MIN))
+    BACKUP_TIME_MIN=$((2 * 60))  # 2:00 AM
+    
+    if [ $CURRENT_TIME_MIN -lt $BACKUP_TIME_MIN ]; then
+      # Next run is today
+      MINUTES_UNTIL=$((BACKUP_TIME_MIN - CURRENT_TIME_MIN))
+    else
+      # Next run is tomorrow
+      MINUTES_UNTIL=$((1440 - CURRENT_TIME_MIN + BACKUP_TIME_MIN))
+    fi
+    
+    HOURS_UNTIL=$((MINUTES_UNTIL / 60))
+    MINS_UNTIL=$((MINUTES_UNTIL % 60))
+    
+    if [ $HOURS_UNTIL -gt 0 ]; then
+      echo -e "${BLUE}  → Next run in: ${HOURS_UNTIL}h ${MINS_UNTIL}m${NC}"
+    else
+      echo -e "${BLUE}  → Next run in: ${MINS_UNTIL}m${NC}"
+    fi
   else
     echo -e "${YELLOW}Auto-backup: DISABLED ✗${NC}"
   fi
@@ -851,6 +874,28 @@ show_status() {
   if sudo crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
     echo -e "${GREEN}Auto-restart: ENABLED ✓${NC}"
     echo -e "${BLUE}  → Every 3 days at midnight${NC}"
+    
+    # Calculate time until next restart (approximate - shows next midnight)
+    CURRENT_HOUR=$(date +%H)
+    CURRENT_MIN=$(date +%M)
+    CURRENT_TIME_MIN=$((CURRENT_HOUR * 60 + CURRENT_MIN))
+    RESTART_TIME_MIN=0  # Midnight
+    
+    if [ $CURRENT_TIME_MIN -eq 0 ]; then
+      # It's midnight now
+      echo -e "${BLUE}  → Next run in: <1m${NC}"
+    else
+      # Next run is tomorrow at midnight
+      MINUTES_UNTIL=$((1440 - CURRENT_TIME_MIN))
+      HOURS_UNTIL=$((MINUTES_UNTIL / 60))
+      MINS_UNTIL=$((MINUTES_UNTIL % 60))
+      
+      if [ $HOURS_UNTIL -gt 0 ]; then
+        echo -e "${BLUE}  → Next check in: ${HOURS_UNTIL}h ${MINS_UNTIL}m${NC}"
+      else
+        echo -e "${BLUE}  → Next check in: ${MINS_UNTIL}m${NC}"
+      fi
+    fi
   else
     echo -e "${YELLOW}Auto-restart: DISABLED ✗${NC}"
   fi

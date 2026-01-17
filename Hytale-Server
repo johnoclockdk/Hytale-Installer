@@ -495,6 +495,18 @@ else
   echo -e "${GREEN}✓ tmux is already installed.${NC}"
 fi
 
+# Check and install cron if missing
+if ! command -v crontab >/dev/null 2>&1; then
+  echo -e "${BLUE}Installing cron...${NC}"
+  sudo apt-get install -y cron
+  # Ensure cron service is enabled and started
+  sudo systemctl enable cron 2>/dev/null || true
+  sudo systemctl start cron 2>/dev/null || true
+  echo -e "${GREEN}✓ cron installed.${NC}"
+else
+  echo -e "${GREEN}✓ cron is already installed.${NC}"
+fi
+
 echo -e "${BLUE}Checking Java installation...${NC}"
 JAVA_VERSION_OUTPUT=$(java -version 2>&1 || true)
 JAVA_VERSION=$(echo "$JAVA_VERSION_OUTPUT" | awk -F[\".] '/version/ {print $2}')

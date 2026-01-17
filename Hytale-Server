@@ -279,7 +279,7 @@ toggle_autobackup() {
     read -p "Do you want to disable auto-backup? (yes/no): " DISABLE
     
     if [ "$DISABLE" = "yes" ]; then
-      sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" | sudo crontab -
+      sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" | sudo crontab - || true
       echo -e "${GREEN}✓ Auto-backup disabled${NC}"
     else
       echo -e "${YELLOW}Auto-backup remains enabled${NC}"
@@ -295,7 +295,7 @@ toggle_autobackup() {
       SCRIPT_PATH="$(realpath "$0")"
       BACKUP_CRON="0 2 * * * $SCRIPT_PATH backup > /dev/null 2>&1"
       
-      ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON" ) | sudo crontab -
+      ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON" ) | sudo crontab - || true
       
       echo -e "${GREEN}✓ Auto-backup enabled${NC}"
       echo -e "${BLUE}Backups will run daily at 2:00 AM${NC}"
@@ -321,7 +321,7 @@ toggle_autorestart() {
     read -p "Do you want to disable auto-restart? (yes/no): " DISABLE
     
     if [ "$DISABLE" = "yes" ]; then
-      sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | sudo crontab -
+      sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | sudo crontab - || true
       echo -e "${GREEN}✓ Auto-restart disabled${NC}"
     else
       echo -e "${YELLOW}Auto-restart remains enabled${NC}"
@@ -333,7 +333,7 @@ toggle_autorestart() {
     read -p "Enable auto-restart? (yes/no): " ENABLE
     
     if [ "$ENABLE" = "yes" ]; then
-      ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab -
+      ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab - || true
       
       echo -e "${GREEN}✓ Auto-restart enabled${NC}"
       echo -e "${BLUE}Server will restart every 3 days at midnight${NC}"
@@ -750,7 +750,7 @@ echo -e "${CYAN}[8/8]${NC} Configuring automatic tasks..."
 
 if [ "$ENABLE_AUTORESTART" = "yes" ]; then
   echo -e "${BLUE}Setting up auto-restart...${NC}"
-  ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab -
+  ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab - || true
   echo -e "${GREEN}✓ Auto-restart enabled${NC}"
   echo -e "${BLUE}  → Server will restart every 3 days at midnight${NC}"
 fi
@@ -760,7 +760,7 @@ if [ "$ENABLE_AUTOBACKUP" = "yes" ]; then
   SCRIPT_PATH="$(realpath "$0")"
   BACKUP_CRON_INSTALL="0 2 * * * $SCRIPT_PATH backup > /dev/null 2>&1"
   
-  ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON_INSTALL" ) | sudo crontab -
+  ( sudo crontab -l 2>/dev/null | grep -v "Hytale-Server backup" ; echo "$BACKUP_CRON_INSTALL" ) | sudo crontab - || true
   
   echo -e "${GREEN}✓ Auto-backup enabled${NC}"
   echo -e "${BLUE}  → Backups will run daily at 2:00 AM${NC}"

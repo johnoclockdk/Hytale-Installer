@@ -80,11 +80,10 @@ backup_server() {
   echo -e "${BOLD}${YELLOW}=== Creating Hytale Server Backup ===${NC}"
   echo ""
   
-  # Check if server is installed
+  # Create base directory if it doesn't exist
   if [ ! -d "$BASE_DIR" ]; then
-    echo -e "${RED}ERROR: Server directory not found.${NC}"
-    echo -e "${YELLOW}Please install the server first.${NC}"
-    exit 1
+    echo -e "${YELLOW}WARNING: Server directory not found. Creating $BASE_DIR${NC}"
+    mkdir -p "$BASE_DIR"
   fi
   
   # Create backup directory if it doesn't exist

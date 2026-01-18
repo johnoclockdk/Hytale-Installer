@@ -86,9 +86,6 @@ backup_server() {
     mkdir -p "$BASE_DIR"
   fi
   
-  # Create backup directory if it doesn't exist
-  mkdir -p "$BACKUP_DIR"
-  
   # Generate backup filename with timestamp
   BACKUP_NAME="hytale-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
   BACKUP_PATH="$BACKUP_DIR/$BACKUP_NAME"

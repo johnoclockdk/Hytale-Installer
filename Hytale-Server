@@ -470,6 +470,24 @@ install_server() {
   read -p "Enable auto-restart? (yes/no): " ENABLE_AUTORESTART
   echo ""
 
+  # Memory configuration
+  echo -e "${CYAN}JVM Memory Configuration${NC}"
+  echo -e "${BLUE}Configure Java heap memory allocation for the server:${NC}"
+  echo -e "${YELLOW}Recommended settings based on available RAM:${NC}"
+  echo -e "${YELLOW}  - 8GB RAM:  Min=2G, Max=4G${NC}"
+  echo -e "${YELLOW}  - 16GB RAM: Min=4G, Max=8G${NC}"
+  echo -e "${YELLOW}  - 32GB RAM: Min=8G, Max=16G${NC}"
+  echo ""
+  read -p "Enter minimum heap size (default: 4G): " MIN_HEAP
+  read -p "Enter maximum heap size (default: 8G): " MAX_HEAP
+  
+  # Set defaults if empty
+  MIN_HEAP=${MIN_HEAP:-4G}
+  MAX_HEAP=${MAX_HEAP:-8G}
+  
+  echo -e "${GREEN}Memory settings: -Xms${MIN_HEAP} -Xmx${MAX_HEAP}${NC}"
+  echo ""
+
 echo -e "${CYAN}[1/7]${NC} Checking dependencies..."
 
 # Check and install unzip if missing
@@ -693,10 +711,11 @@ MONITOR_PID=$!
 # Kill any existing tmux session
 tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 
-# Start server in tmux session
-tmux new-session -d -s "$SESSION_NAME" "cd '$SCRIPT_DIR' && java -jar HytaleServer.jar --assets Assets.zip"
+# Start server in tmux session with configured JVM memory settings
+tmux new-session -d -s "$SESSION_NAME" "cd '$SCRIPT_DIR' && java -Xms${MIN_HEAP} -Xmx${MAX_HEAP} -jar HytaleServer.jar --assets Assets.zip"
 
 echo "[INFO] Hytale server started in tmux session: $SESSION_NAME"
+echo "[INFO] JVM Memory: -Xms${MIN_HEAP} -Xmx${MAX_HEAP}"
 echo "[INFO] Attach with: tmux attach -t $SESSION_NAME"
 echo "[INFO] Detach with: Ctrl+B then D"
 

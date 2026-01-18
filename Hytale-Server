@@ -474,18 +474,18 @@ install_server() {
   echo -e "${CYAN}JVM Memory Configuration${NC}"
   echo -e "${BLUE}Configure Java heap memory allocation for the server:${NC}"
   echo -e "${YELLOW}Recommended settings based on available RAM:${NC}"
-  echo -e "${YELLOW}  - 8GB RAM:  Min=2G, Max=4G${NC}"
-  echo -e "${YELLOW}  - 16GB RAM: Min=4G, Max=8G${NC}"
-  echo -e "${YELLOW}  - 32GB RAM: Min=8G, Max=16G${NC}"
+  echo -e "${YELLOW}  - 8GB RAM:  Min=2, Max=4${NC}"
+  echo -e "${YELLOW}  - 16GB RAM: Min=4, Max=8${NC}"
+  echo -e "${YELLOW}  - 32GB RAM: Min=8, Max=16${NC}"
   echo ""
-  read -p "Enter minimum heap size (default: 4G): " MIN_HEAP
-  read -p "Enter maximum heap size (default: 8G): " MAX_HEAP
+  read -p "Enter minimum heap size in GB (default: 4): " MIN_HEAP
+  read -p "Enter maximum heap size in GB (default: 8): " MAX_HEAP
   
   # Set defaults if empty
-  MIN_HEAP=${MIN_HEAP:-4G}
-  MAX_HEAP=${MAX_HEAP:-8G}
-  
-  echo -e "${GREEN}Memory settings: -Xms${MIN_HEAP} -Xmx${MAX_HEAP}${NC}"
+  MIN_HEAP=${MIN_HEAP:-4}
+  MAX_HEAP=${MAX_HEAP:-8}
+
+  echo -e "${GREEN}Memory settings: -Xms${MIN_HEAP}G -Xmx${MAX_HEAP}G${NC}"
   echo ""
 
 echo -e "${CYAN}[1/7]${NC} Checking dependencies..."
@@ -651,49 +651,47 @@ mkdir -p "$TEMP_DIR"
 
 echo -e "${CYAN}[5/7]${NC} Creating server start script..."
 
-cat << 'EOF' > "$BASE_DIR/start.sh"
+cat > "$BASE_DIR/start.sh" << EOF
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
-LOGS_DIR="$SCRIPT_DIR/logs"
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+cd "\$SCRIPT_DIR"
+LOGS_DIR="\$SCRIPT_DIR/logs"
 SESSION_NAME="hytale-server"
+
+# JVM Configuration
+MIN_HEAP="${MIN_HEAP}"
+MAX_HEAP="${MAX_HEAP}"
 
 # Monitor logs and send auth command when needed
 monitor_and_auth() {
-  # Wait for logs directory to be created
-  while [ ! -d "$LOGS_DIR" ]; do
+  while [ ! -d "\$LOGS_DIR" ]; do
     sleep 1
   done
   
-  echo "[AUTH] Monitoring logs for authentication requests..."
+  echo "[AUTH] Monitoring for authentication requests..."
   local SENT_AUTH=false
   
-  # Monitor the latest log file
   while true; do
-    LATEST_LOG=$(ls -t "$LOGS_DIR"/*.log 2>/dev/null | head -1)
-    if [ -n "$LATEST_LOG" ]; then
+    LATEST_LOG=\$(ls -t "\$LOGS_DIR"/*.log 2>/dev/null | head -1)
+    if [ -n "\$LATEST_LOG" ]; then
       # Check if server needs authentication
-      if ! $SENT_AUTH && tail -50 "$LATEST_LOG" | grep -q "No server tokens configured"; then
-        echo "[AUTH] Server needs authentication, configuring persistence and sending auth command..."
-        sleep 3
-        # First, set auth persistence to Encrypted
-        tmux send-keys -t "$SESSION_NAME" "/auth persistence Encrypted" C-m
+      if ! \$SENT_AUTH && tail -50 "\$LATEST_LOG" | grep -q "No server tokens configured"; then
+        echo "[AUTH] Configuring authentication..."
+        sleep 2
+        tmux send-keys -t "\$SESSION_NAME" "/auth persistence Encrypted" C-m
         sleep 1
-        # Then send the auth login command
-        tmux send-keys -t "$SESSION_NAME" "/auth login device" C-m
+        tmux send-keys -t "\$SESSION_NAME" "/auth login device" C-m
         SENT_AUTH=true
-        echo "[AUTH] Auth commands sent. Waiting for authentication URL..."
       fi
       
-      # Check if authentication URL was generated
-      if grep -q "user_code=" "$LATEST_LOG" 2>/dev/null; then
-        # Extract and display the URL
-        AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" | tail -1)
-        if [ -n "$AUTH_URL" ]; then
+      # Check for authentication URL
+      if grep -q "user_code=" "\$LATEST_LOG" 2>/dev/null; then
+        AUTH_URL=\$(grep -oP 'https://oauth\\.accounts\\.hytale\\.com/oauth2/device/verify\\?user_code=[A-Za-z0-9]+' "\$LATEST_LOG" | tail -1)
+        if [ -n "\$AUTH_URL" ]; then
           echo ""
           echo "=========================================="
-          echo "AUTHENTICATION REQUIRED"
-          echo "Visit: $AUTH_URL"
+          echo "🔐 AUTHENTICATION REQUIRED"
+          echo "🔗 Visit: \$AUTH_URL"
           echo "=========================================="
           echo ""
           return 0
@@ -704,30 +702,40 @@ monitor_and_auth() {
   done
 }
 
-# Always start auth monitor in background
+# Start authentication monitor in background
 monitor_and_auth &
-MONITOR_PID=$!
+MONITOR_PID=\$!
 
-# Kill any existing tmux session
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+# Kill existing session if any
+tmux kill-session -t "\$SESSION_NAME" 2>/dev/null || true
 
-# Start server in tmux session with configured JVM memory settings
-tmux new-session -d -s "$SESSION_NAME" "cd '$SCRIPT_DIR' && java -Xms${MIN_HEAP} -Xmx${MAX_HEAP} -jar HytaleServer.jar --assets Assets.zip"
+# Build Java command with optimizations
+JAVA_CMD="java -Xms\${MIN_HEAP}G -Xmx\${MAX_HEAP}G"
 
-echo "[INFO] Hytale server started in tmux session: $SESSION_NAME"
-echo "[INFO] JVM Memory: -Xms${MIN_HEAP} -Xmx${MAX_HEAP}"
-echo "[INFO] Attach with: tmux attach -t $SESSION_NAME"
-echo "[INFO] Detach with: Ctrl+B then D"
+# Add AOT cache if available (improves startup time)
+if [ -f "\$SCRIPT_DIR/HytaleServer.aot" ]; then
+  JAVA_AOT="-XX:AOTCache=HytaleServer.aot"
+fi
 
-# Keep the script running by monitoring the tmux session
-while tmux has-session -t "$SESSION_NAME" 2>/dev/null; do
+JAVA_CMD="\$JAVA_CMD \$JAVA_AOT -jar HytaleServer.jar --assets Assets.zip"
+
+# Start server in tmux session
+tmux new-session -d -s "\$SESSION_NAME" "cd '\$SCRIPT_DIR' && \$JAVA_CMD"
+
+echo "[INFO] Hytale server started"
+echo "[INFO] Session: \$SESSION_NAME"
+echo "[INFO] Memory: -Xms\${MIN_HEAP} -Xmx\${MAX_HEAP}"
+echo "[INFO] Attach: tmux attach -t \$SESSION_NAME"
+echo "[INFO] Detach: Ctrl+B then D"
+
+# Monitor tmux session
+while tmux has-session -t "\$SESSION_NAME" 2>/dev/null; do
   sleep 5
 done
 
-# Clean up monitor if it's still running
-kill $MONITOR_PID 2>/dev/null || true
-
-echo "[INFO] Tmux session ended. Server stopped."
+# Cleanup
+kill \$MONITOR_PID 2>/dev/null || true
+echo "[INFO] Server stopped"
 EOF
 
 

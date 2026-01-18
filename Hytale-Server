@@ -3,9 +3,10 @@ set -e
 
 # ================= CONFIG =================
 USER_NAME=$(whoami)
-BASE_DIR="$(pwd)/hytale_server"
-TOOLS_DIR="$(pwd)/.hytale-tools"
-TEMP_DIR="$(pwd)/.hytale-temp"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$SCRIPT_DIR/hytale_server"
+TOOLS_DIR="$SCRIPT_DIR/.hytale-tools"
+TEMP_DIR="$SCRIPT_DIR/.hytale-temp"
 BACKUP_DIR="$BASE_DIR/backups"
 DOWNLOADER_URL="https://downloader.hytale.com/hytale-downloader.zip"
 SERVICE_FILE="/etc/systemd/system/hytale.service" 
@@ -80,7 +81,7 @@ backup_server() {
   echo -e "${BOLD}${YELLOW}=== Creating Hytale Server Backup ===${NC}"
   echo ""
   
-  # Create base directory if it doesn't exist
+  # Create base directory and backup directory if they don't exist
   if [ ! -d "$BASE_DIR" ]; then
     echo -e "${YELLOW}WARNING: Server directory not found. Creating $BASE_DIR${NC}"
     mkdir -p "$BASE_DIR"

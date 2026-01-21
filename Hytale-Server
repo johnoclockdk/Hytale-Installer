@@ -46,20 +46,6 @@ validate_port() {
   return 0
 }
 
-# Check if running as root when needed
-check_sudo_available() {
-  if ! command -v sudo >/dev/null 2>&1; then
-    echo -e "${RED}Error: sudo is required but not installed${NC}" >&2
-    return 1
-  fi
-  
-  if ! sudo -n true 2>/dev/null; then
-    echo -e "${YELLOW}Note: This operation requires sudo privileges${NC}"
-  fi
-  
-  return 0
-}
-
 # Check available disk space
 check_disk_space() {
   local required_mb=$1
@@ -169,7 +155,7 @@ check_dependency() {
     if [ -n "$description" ]; then
       echo -e "${BLUE}  Purpose: $description${NC}"
     fi
-    echo -e "${BLUE}  Install: ${BOLD}sudo apt-get install $package${NC}"
+    echo -e "${BLUE}  Install: ${BOLD}apt-get install $package${NC}"
     return 1
   fi
   
@@ -244,19 +230,19 @@ uninstall_server() {
   # Stop and disable service
   if systemctl is-active --quiet hytale 2>/dev/null; then
     echo -e "${BLUE}Stopping Hytale service...${NC}"
-    sudo systemctl stop hytale
+    systemctl stop hytale
   fi
   
   if systemctl is-enabled --quiet hytale 2>/dev/null; then
     echo -e "${BLUE}Disabling Hytale service...${NC}"
-    sudo systemctl disable hytale
+    systemctl disable hytale
   fi
   
   # Remove service file
   if [ -f "$SERVICE_FILE" ]; then
     echo -e "${BLUE}Removing service file...${NC}"
-    sudo rm -f "$SERVICE_FILE"
-    sudo systemctl daemon-reload
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload
   fi
   
   # Remove server files
@@ -280,12 +266,12 @@ uninstall_server() {
   # Remove firewall rule
   if command -v ufw >/dev/null 2>&1; then
     echo -e "${BLUE}Removing firewall rule...${NC}"
-    sudo ufw delete allow ${UNINSTALL_PORT}/udp 2>/dev/null || true
+    ufw delete allow ${UNINSTALL_PORT}/udp 2>/dev/null || true
   fi
   
   # Remove cron jobs
   echo -e "${BLUE}Removing scheduled tasks...${NC}"
-  sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | grep -v "backup > /dev/null" | sudo crontab - 2>/dev/null || true
+  crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | grep -v "backup > /dev/null" | crontab - 2>/dev/null || true
   echo -e "${GREEN}✓ Scheduled tasks removed${NC}"
   
   echo ""
@@ -401,7 +387,7 @@ restore_server() {
   SERVER_WAS_RUNNING=false
   if systemctl is-active --quiet hytale 2>/dev/null; then
     echo -e "${CYAN}[1/4]${NC} Stopping Hytale server..."
-    sudo systemctl stop hytale
+    systemctl stop hytale
     
     # Wait for server to fully stop and tmux session to close
     for i in {1..10}; do
@@ -469,7 +455,7 @@ restore_server() {
   fi
   
   if [ "$START_NOW" = "yes" ]; then
-    sudo systemctl start hytale
+    systemctl start hytale
     echo -e "${GREEN}Server started.${NC}"
   fi
   
@@ -486,13 +472,13 @@ toggle_autobackup() {
   echo ""
   
   # Check if auto-backup cron exists
-  if sudo crontab -l 2>/dev/null | grep -q "backup > /dev/null"; then
+  if crontab -l 2>/dev/null | grep -q "backup > /dev/null"; then
     echo -e "${YELLOW}Auto-backup is currently: ${BOLD}ENABLED${NC}"
     echo ""
     read -p "Do you want to disable auto-backup? (yes/no): " DISABLE
     
     if [ "$DISABLE" = "yes" ]; then
-      sudo crontab -l 2>/dev/null | grep -v "backup > /dev/null" | sudo crontab - || true
+      crontab -l 2>/dev/null | grep -v "backup > /dev/null" | crontab - || true
       echo -e "${GREEN}✓ Auto-backup disabled${NC}"
     else
       echo -e "${YELLOW}Auto-backup remains enabled${NC}"
@@ -504,7 +490,7 @@ toggle_autobackup() {
     read -p "Enable auto-backup? (yes/no): " ENABLE
     
     if [ "$ENABLE" = "yes" ]; then
-      ( sudo crontab -l 2>/dev/null | grep -v "backup > /dev/null" ; echo "$BACKUP_CRON" ) | sudo crontab - || true
+      ( crontab -l 2>/dev/null | grep -v "backup > /dev/null" ; echo "$BACKUP_CRON" ) | crontab - || true
       
       echo -e "${GREEN}✓ Auto-backup enabled${NC}"
       echo -e "${BLUE}Backups will run daily at 2:00 AM${NC}"
@@ -524,13 +510,13 @@ toggle_autorestart() {
   echo ""
   
   # Check if auto-restart cron exists
-  if sudo crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
+  if crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
     echo -e "${YELLOW}Auto-restart is currently: ${BOLD}ENABLED${NC}"
     echo ""
     read -p "Do you want to disable auto-restart? (yes/no): " DISABLE
     
     if [ "$DISABLE" = "yes" ]; then
-      sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | sudo crontab - || true
+      crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | crontab - || true
       echo -e "${GREEN}✓ Auto-restart disabled${NC}"
     else
       echo -e "${YELLOW}Auto-restart remains enabled${NC}"
@@ -542,7 +528,7 @@ toggle_autorestart() {
     read -p "Enable auto-restart? (yes/no): " ENABLE
     
     if [ "$ENABLE" = "yes" ]; then
-      ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab - || true
+      ( crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | crontab - || true
       
       echo -e "${GREEN}✓ Auto-restart enabled${NC}"
       echo -e "${BLUE}Server will restart every 3 days at midnight${NC}"
@@ -589,7 +575,7 @@ update_server() {
   fi
   
   echo -e "${CYAN}[2/6]${NC} Stopping Hytale service..."
-  sudo systemctl stop hytale
+  systemctl stop hytale
   
   # Create temp directory
   mkdir -p "$TEMP_DIR"
@@ -668,7 +654,7 @@ update_server() {
   # Update server files (keep existing config and world data)
   if [ -d "Server" ]; then
     # Remove old server files but keep world data, configs, and start script
-    find "$BASE_DIR" -mindepth 1 -maxdepth 1 ! -name 'universe' ! -name '*.json' ! -name 'backups' ! -name 'logs' ! -name '*.sh' ! -name '*.enc' -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE_DIR" -mindepth 1 -maxdepth 1 ! -name 'universe'  ! -name 'mods' ! -name '*.json' ! -name 'backups' ! -name 'logs' ! -name '*.sh' ! -name '*.enc' -exec rm -rf {} + 2>/dev/null || true
     
     if ! cp -r Server/* "$BASE_DIR/" 2>/dev/null; then
       echo -e "${RED}Failed to copy server files.${NC}" >&2
@@ -699,7 +685,7 @@ update_server() {
   mkdir -p "$TEMP_DIR"
   
   echo -e "${CYAN}[6/6]${NC} Starting Hytale service..."
-  sudo systemctl start hytale
+  systemctl start hytale
   
   echo ""
   echo -e "${GREEN}==========================================${NC}"
@@ -711,11 +697,6 @@ install_server() {
   echo ""
   echo -e "${BOLD}${CYAN}=== Installing Hytale Dedicated Server ===${NC}"
   echo ""
-  
-  # Check sudo availability
-  if ! check_sudo_available; then
-    exit 1
-  fi
   
   # Check if already installed
   if systemctl is-active --quiet hytale 2>/dev/null; then
@@ -815,18 +796,18 @@ fi
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
   echo ""
   echo -e "${YELLOW}Installing missing dependencies...${NC}"
-  sudo apt-get update -qq
+  apt-get update -qq
   
   for dep in "${MISSING_DEPS[@]}"; do
     echo -e "${BLUE}Installing $dep...${NC}"
-    sudo apt-get install -y "$dep"
+    apt-get install -y "$dep"
     echo -e "${GREEN}✓ $dep installed${NC}"
   done
   
   # Ensure cron service is enabled if installed
   if [[ " ${MISSING_DEPS[@]} " =~ " cron " ]]; then
-    sudo systemctl enable cron 2>/dev/null || true
-    sudo systemctl start cron 2>/dev/null || true
+    systemctl enable cron 2>/dev/null || true
+    systemctl start cron 2>/dev/null || true
   fi
 else
   echo -e "${GREEN}✓ All dependencies are installed${NC}"
@@ -845,7 +826,7 @@ else
   JAVA_URL="https://download.oracle.com/java/25/latest/$JAVA_DEB"
   
   if download_file "$JAVA_URL" "$JAVA_DEB" "Java 25 JDK"; then
-    if sudo dpkg -i "$JAVA_DEB"; then
+    if dpkg -i "$JAVA_DEB"; then
       echo -e "${GREEN}✓ Java 25 installed successfully.${NC}"
       rm "$JAVA_DEB"
     else
@@ -1053,7 +1034,7 @@ chmod +x "$BASE_DIR/start.sh"
 echo -e "${GREEN}Start script created at $BASE_DIR/start.sh.${NC}"
 
 echo -e "${CYAN}[6/7]${NC} Creating systemd service..."
-sudo tee "$SERVICE_FILE" > /dev/null << EOF
+tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
 Description=Hytale Dedicated Server
 After=network.target
@@ -1074,8 +1055,8 @@ EOF
 
 
 echo -e "${BLUE}Reloading systemd and enabling service...${NC}"
-sudo systemctl daemon-reload
-sudo systemctl enable hytale
+systemctl daemon-reload
+systemctl enable hytale
 echo -e "${GREEN}Hytale service enabled (will start on boot).${NC}"
 
 
@@ -1083,7 +1064,7 @@ echo -e "${GREEN}Hytale service enabled (will start on boot).${NC}"
 echo -e "${CYAN}[7/7]${NC} Configuring firewall..."
 if command -v ufw >/dev/null 2>&1; then
   echo -e "${BLUE}Configuring UFW firewall...${NC}"
-  sudo ufw allow ${CUSTOM_PORT}/udp
+  ufw allow ${CUSTOM_PORT}/udp
   echo -e "${GREEN}UFW rule added for UDP port ${CUSTOM_PORT}.${NC}"
 else
   echo -e "${YELLOW}UFW not found. Please ensure UDP port ${CUSTOM_PORT} is open.${NC}"
@@ -1095,14 +1076,14 @@ echo -e "${CYAN}[8/8]${NC} Configuring automatic tasks..."
 
 if [ "$ENABLE_AUTORESTART" = "yes" ]; then
   echo -e "${BLUE}Setting up auto-restart...${NC}"
-  ( sudo crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | sudo crontab - || true
+  ( crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | crontab - || true
   echo -e "${GREEN}✓ Auto-restart enabled${NC}"
   echo -e "${BLUE}  → Server will restart every 3 days at midnight${NC}"
 fi
 
 if [ "$ENABLE_AUTOBACKUP" = "yes" ]; then
   echo -e "${BLUE}Setting up auto-backup...${NC}"
-  ( sudo crontab -l 2>/dev/null | grep -v "backup > /dev/null" ; echo "$BACKUP_CRON" ) | sudo crontab - || true
+  ( crontab -l 2>/dev/null | grep -v "backup > /dev/null" ; echo "$BACKUP_CRON" ) | crontab - || true
   
   echo -e "${GREEN}✓ Auto-backup enabled${NC}"
   echo -e "${BLUE}  → Backups will run daily at 2:00 AM${NC}"
@@ -1190,7 +1171,7 @@ show_status() {
   echo -e "${BOLD}${CYAN}Scheduled Tasks:${NC}"
   
   # Auto-backup status
-  if sudo crontab -l 2>/dev/null | grep -q "backup > /dev/null"; then
+  if crontab -l 2>/dev/null | grep -q "backup > /dev/null"; then
     echo -e "${GREEN}Auto-backup: ENABLED ✓${NC}"
     
     # Extract hour and minute from BACKUP_CRON
@@ -1237,7 +1218,7 @@ show_status() {
   fi
   
   # Auto-restart status
-  if sudo crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
+  if crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
     echo -e "${GREEN}Auto-restart: ENABLED ✓${NC}"
     
     # Extract hour and minute from RESTART_CRON
@@ -1398,7 +1379,7 @@ start_server() {
     exit 0
   fi
   
-  sudo systemctl start hytale
+  systemctl start hytale
   
   if systemctl is-active --quiet hytale; then
     echo -e "${GREEN}Hytale server started successfully.${NC}"
@@ -1461,7 +1442,7 @@ restart_server() {
   if systemctl is-active --quiet hytale 2>/dev/null; then
     SERVER_WAS_RUNNING=true
     echo -e "${CYAN}[1/2]${NC} Stopping server..."
-    sudo systemctl stop hytale
+    systemctl stop hytale
     
     # Wait for clean shutdown
     for i in {1..15}; do
@@ -1477,7 +1458,7 @@ restart_server() {
   fi
   
   echo -e "${CYAN}[2/2]${NC} Starting server..."
-  sudo systemctl start hytale
+  systemctl start hytale
   
   if systemctl is-active --quiet hytale; then
     echo -e "${GREEN}✓ Server restarted successfully${NC}"
@@ -1507,7 +1488,7 @@ stop_server() {
     exit 0
   fi
   
-  sudo systemctl stop hytale
+  systemctl stop hytale
   echo -e "${GREEN}Hytale server stopped.${NC}"
 }
 

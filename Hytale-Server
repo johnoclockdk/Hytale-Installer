@@ -18,14 +18,28 @@ BASE_DIR="$SCRIPT_DIR/hytale_server"
 TOOLS_DIR="$SCRIPT_DIR/.hytale-tools"
 TEMP_DIR="$SCRIPT_DIR/.hytale-temp"
 BACKUP_DIR="$BASE_DIR/backups"
+PID_FILE="$SCRIPT_DIR/.hytale-server.pid"
 DOWNLOADER_URL="https://downloader.hytale.com/hytale-downloader.zip"
-SERVICE_FILE="/etc/systemd/system/hytale.service" 
-RESTART_CRON="0 0 */3 * * /usr/bin/systemctl restart hytale" # Every 3 days at midnight
+RESTART_CRON="0 0 */3 * * $(realpath $0) restart > /dev/null 2>&1" # Every 3 days at midnight
 BACKUP_CRON="0 1 * * * $(realpath $0) backup > /dev/null 2>&1" # Daily at 1:00 AM
+AUTOSTART_CRON="@reboot sleep 30 && $(realpath $0) start --skip-auth > /dev/null 2>&1" # Start on boot
 BACKUP_RETENTION=7
 PORT=5520
 MIN_DISK_SPACE_MB=5120  # 5 GB minimum
 AUTH_WAIT_TIMEOUT=120   # 2 minutes for auth URL
+MODS_DIR="$BASE_DIR/mods"
+# =========================================
+
+# ================= MODS LIST =================
+# Define available mods with their download URLs
+# Mod filenames will be automatically set to <mod-name>.jar
+declare -A MOD_URLS=(
+  ["BetterMap"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
+  ["EyeSpy"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
+  ["Ymmersive_Melodies"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
+  ["Miners_Helmet"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
+  ["Simple_Claims"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
+)
 # =========================================
 
 # ================= VALIDATION & HELPER FUNCTIONS =================
@@ -177,6 +191,22 @@ format_bytes() {
   fi
 }
 
+# Check if server is running
+is_server_running() {
+  if tmux has-session -t hytale-server 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# Check if auto-start is enabled
+is_autostart_enabled() {
+  if crontab -l 2>/dev/null | grep -q "@reboot.*$(basename $0) start"; then
+    return 0
+  fi
+  return 1
+}
+
 # Create backup with unified logic
 create_backup_archive() {
   local backup_name=$1
@@ -193,6 +223,11 @@ create_backup_archive() {
     echo -e "${BLUE}  → universe/${NC}"
   fi
   
+  if [ -d "$BASE_DIR/mods" ]; then
+    backup_items+=("mods")
+    echo -e "${BLUE}  → mods/${NC}"
+  fi
+  
   for file in bans.json config.json permissions.json whitelist.json; do
     if [ -f "$BASE_DIR/$file" ]; then
       backup_items+=("$file")
@@ -207,6 +242,8 @@ create_backup_archive() {
   
   # Create compressed backup
   if tar -czf "$backup_path" -C "$BASE_DIR" "${backup_items[@]}" 2>/dev/null; then
+    # Fix ownership to match the base directory owner
+    chown --reference="$BASE_DIR" "$backup_path" 2>/dev/null || true
     local backup_size=$(du -h "$backup_path" | cut -f1)
     echo -e "${GREEN}✓ Backup created: $backup_name (${backup_size})${NC}"
     echo "$backup_path"
@@ -227,22 +264,16 @@ uninstall_server() {
   # Use default port if CUSTOM_PORT is not set
   UNINSTALL_PORT=${CUSTOM_PORT:-$PORT}
   
-  # Stop and disable service
-  if systemctl is-active --quiet hytale 2>/dev/null; then
-    echo -e "${BLUE}Stopping Hytale service...${NC}"
-    systemctl stop hytale
+  # Stop server if running
+  if is_server_running; then
+    echo -e "${BLUE}Stopping Hytale server...${NC}"
+    tmux kill-session -t hytale-server 2>/dev/null || true
+    echo -e "${GREEN}✓ Server stopped${NC}"
   fi
   
-  if systemctl is-enabled --quiet hytale 2>/dev/null; then
-    echo -e "${BLUE}Disabling Hytale service...${NC}"
-    systemctl disable hytale
-  fi
-  
-  # Remove service file
-  if [ -f "$SERVICE_FILE" ]; then
-    echo -e "${BLUE}Removing service file...${NC}"
-    rm -f "$SERVICE_FILE"
-    systemctl daemon-reload
+  # Remove PID file
+  if [ -f "$PID_FILE" ]; then
+    rm -f "$PID_FILE"
   fi
   
   # Remove server files
@@ -271,7 +302,7 @@ uninstall_server() {
   
   # Remove cron jobs
   echo -e "${BLUE}Removing scheduled tasks...${NC}"
-  crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | grep -v "backup > /dev/null" | crontab - 2>/dev/null || true
+  crontab -l 2>/dev/null | grep -v "restart hytale\|restart >" | grep -v "backup >" | grep -v "@reboot.*start" | crontab - 2>/dev/null || true
   echo -e "${GREEN}✓ Scheduled tasks removed${NC}"
   
   echo ""
@@ -385,20 +416,17 @@ restore_server() {
   
   # Stop server if running
   SERVER_WAS_RUNNING=false
-  if systemctl is-active --quiet hytale 2>/dev/null; then
+  if is_server_running; then
     echo -e "${CYAN}[1/4]${NC} Stopping Hytale server..."
-    systemctl stop hytale
+    tmux kill-session -t hytale-server 2>/dev/null || true
     
-    # Wait for server to fully stop and tmux session to close
+    # Wait for server to fully stop
     for i in {1..10}; do
-      if ! tmux has-session -t hytale-server 2>/dev/null; then
+      if ! is_server_running; then
         break
       fi
       sleep 1
     done
-    
-    # Force kill tmux session if still running
-    tmux kill-session -t hytale-server 2>/dev/null || true
     
     echo -e "${GREEN}✓ Server stopped${NC}"
     SERVER_WAS_RUNNING=true
@@ -455,8 +483,13 @@ restore_server() {
   fi
   
   if [ "$START_NOW" = "yes" ]; then
-    systemctl start hytale
-    echo -e "${GREEN}Server started.${NC}"
+    "$BASE_DIR/start.sh" &
+    sleep 3
+    if is_server_running; then
+      echo -e "${GREEN}Server started.${NC}"
+    else
+      echo -e "${YELLOW}Server may be starting, check with: $0 status${NC}"
+    fi
   fi
   
   echo ""
@@ -510,13 +543,13 @@ toggle_autorestart() {
   echo ""
   
   # Check if auto-restart cron exists
-  if crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
+  if crontab -l 2>/dev/null | grep -q "restart hytale\|restart >"; then
     echo -e "${YELLOW}Auto-restart is currently: ${BOLD}ENABLED${NC}"
     echo ""
     read -p "Do you want to disable auto-restart? (yes/no): " DISABLE
     
     if [ "$DISABLE" = "yes" ]; then
-      crontab -l 2>/dev/null | grep -v "systemctl restart hytale" | crontab - || true
+      crontab -l 2>/dev/null | grep -v "restart hytale\|restart >" | crontab - || true
       echo -e "${GREEN}✓ Auto-restart disabled${NC}"
     else
       echo -e "${YELLOW}Auto-restart remains enabled${NC}"
@@ -528,7 +561,7 @@ toggle_autorestart() {
     read -p "Enable auto-restart? (yes/no): " ENABLE
     
     if [ "$ENABLE" = "yes" ]; then
-      ( crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | crontab - || true
+      ( crontab -l 2>/dev/null | grep -v "restart hytale\|restart >" ; echo "$RESTART_CRON" ) | crontab - || true
       
       echo -e "${GREEN}✓ Auto-restart enabled${NC}"
       echo -e "${BLUE}Server will restart every 3 days at midnight${NC}"
@@ -546,9 +579,9 @@ update_server() {
   echo ""
   
   # Check if server is installed
-  if ! systemctl list-unit-files | grep -q hytale.service; then
+  if [ ! -f "$BASE_DIR/start.sh" ]; then
     echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
-    echo -e "${YELLOW}Please install it first using option 1.${NC}"
+    echo -e "${YELLOW}Please install it first using: $0 install${NC}"
     exit 1
   fi
   
@@ -574,8 +607,11 @@ update_server() {
     ROLLBACK_BACKUP=""
   fi
   
-  echo -e "${CYAN}[2/6]${NC} Stopping Hytale service..."
-  systemctl stop hytale
+  echo -e "${CYAN}[2/6]${NC} Stopping Hytale server..."
+  if is_server_running; then
+    tmux kill-session -t hytale-server 2>/dev/null || true
+    sleep 2
+  fi
   
   # Create temp directory
   mkdir -p "$TEMP_DIR"
@@ -684,8 +720,9 @@ update_server() {
   rm -rf "$TEMP_DIR"
   mkdir -p "$TEMP_DIR"
   
-  echo -e "${CYAN}[6/6]${NC} Starting Hytale service..."
-  systemctl start hytale
+  echo -e "${CYAN}[6/6]${NC} Starting Hytale server..."
+  "$BASE_DIR/start.sh" &
+  sleep 3
   
   echo ""
   echo -e "${GREEN}==========================================${NC}"
@@ -699,9 +736,9 @@ install_server() {
   echo ""
   
   # Check if already installed
-  if systemctl is-active --quiet hytale 2>/dev/null; then
-    echo -e "${YELLOW}WARNING: Hytale service is already running!${NC}"
-    echo -e "${YELLOW}Please uninstall first using: ./Hytale-Server uninstall${NC}"
+  if is_server_running; then
+    echo -e "${YELLOW}WARNING: Hytale server is already running!${NC}"
+    echo -e "${YELLOW}Please stop it first using: $0 stop${NC}"
     exit 1
   fi
 
@@ -806,8 +843,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
   
   # Ensure cron service is enabled if installed
   if [[ " ${MISSING_DEPS[@]} " =~ " cron " ]]; then
-    systemctl enable cron 2>/dev/null || true
-    systemctl start cron 2>/dev/null || true
+    service cron start 2>/dev/null || /etc/init.d/cron start 2>/dev/null || true
   fi
 else
   echo -e "${GREEN}✓ All dependencies are installed${NC}"
@@ -955,6 +991,11 @@ MAX_HEAP="${MAX_HEAP}"
 
 # Monitor logs and send auth command when needed
 monitor_and_auth() {
+  # Don't monitor if already authenticated
+  if [ -f "\$SCRIPT_DIR/auth.enc" ]; then
+    return 0
+  fi
+  
   while [ ! -d "\$LOGS_DIR" ]; do
     sleep 1
   done
@@ -973,20 +1014,6 @@ monitor_and_auth() {
         sleep 1
         tmux send-keys -t "\$SESSION_NAME" "/auth login device" C-m
         SENT_AUTH=true
-      fi
-      
-      # Check for authentication URL
-      if grep -q "user_code=" "\$LATEST_LOG" 2>/dev/null; then
-        AUTH_URL=\$(grep -oP 'https://oauth\\.accounts\\.hytale\\.com/oauth2/device/verify\\?user_code=[A-Za-z0-9]+' "\$LATEST_LOG" | tail -1)
-        if [ -n "\$AUTH_URL" ]; then
-          echo ""
-          echo "=========================================="
-          echo "🔐 AUTHENTICATION REQUIRED"
-          echo "🔗 Visit: \$AUTH_URL"
-          echo "=========================================="
-          echo ""
-          return 0
-        fi
       fi
     fi
     sleep 2
@@ -1026,42 +1053,13 @@ done
 
 # Cleanup
 kill \$MONITOR_PID 2>/dev/null || true
-echo "[INFO] Server stopped"
 EOF
 
 
 chmod +x "$BASE_DIR/start.sh"
 echo -e "${GREEN}Start script created at $BASE_DIR/start.sh.${NC}"
 
-echo -e "${CYAN}[6/7]${NC} Creating systemd service..."
-tee "$SERVICE_FILE" > /dev/null << EOF
-[Unit]
-Description=Hytale Dedicated Server
-After=network.target
-
-[Service]
-User=$USER_NAME
-WorkingDirectory=$BASE_DIR
-ExecStart=$BASE_DIR/start.sh
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-
-echo -e "${BLUE}Reloading systemd and enabling service...${NC}"
-systemctl daemon-reload
-systemctl enable hytale
-echo -e "${GREEN}Hytale service enabled (will start on boot).${NC}"
-
-
-# ---- 7. Open firewall (UDP / QUIC) ----
-echo -e "${CYAN}[7/7]${NC} Configuring firewall..."
+echo -e "${CYAN}[6/7]${NC} Configuring firewall..."
 if command -v ufw >/dev/null 2>&1; then
   echo -e "${BLUE}Configuring UFW firewall...${NC}"
   ufw allow ${CUSTOM_PORT}/udp
@@ -1072,12 +1070,21 @@ fi
 
 
 # ---- 8. Configure automatic tasks ----
-echo -e "${CYAN}[8/8]${NC} Configuring automatic tasks..."
+echo -e "${CYAN}[7/7]${NC} Configuring automatic tasks..."
 
+# Auto-start on boot
 if [ "$ENABLE_AUTORESTART" = "yes" ]; then
-  echo -e "${BLUE}Setting up auto-restart...${NC}"
-  ( crontab -l 2>/dev/null | grep -v "systemctl restart hytale" ; echo "$RESTART_CRON" ) | crontab - || true
-  echo -e "${GREEN}✓ Auto-restart enabled${NC}"
+  echo -e "${BLUE}Setting up auto-start on boot...${NC}"
+  ( crontab -l 2>/dev/null | grep -v "@reboot.*start" ; echo "$AUTOSTART_CRON" ) | crontab - || true
+  echo -e "${GREEN}✓ Auto-start enabled${NC}"
+  echo -e "${BLUE}  → Server will start automatically after system reboot${NC}"
+fi
+
+# Auto-restart cron
+if [ "$ENABLE_AUTORESTART" = "yes" ]; then
+  echo -e "${BLUE}Setting up periodic auto-restart...${NC}"
+  ( crontab -l 2>/dev/null | grep -v "restart hytale\|restart >" ; echo "$RESTART_CRON" ) | crontab - || true
+  echo -e "${GREEN}✓ Periodic auto-restart enabled${NC}"
   echo -e "${BLUE}  → Server will restart every 3 days at midnight${NC}"
 fi
 
@@ -1092,7 +1099,7 @@ fi
 
 if [ "$ENABLE_AUTORESTART" != "yes" ] && [ "$ENABLE_AUTOBACKUP" != "yes" ]; then
   echo -e "${YELLOW}No automatic tasks configured.${NC}"
-  echo -e "${YELLOW}You can enable them later with: ./Hytale-Server autobackup${NC}"
+  echo -e "${YELLOW}You can enable them later with: $0 autobackup or $0 autorestart${NC}"
 fi
 
 
@@ -1115,19 +1122,19 @@ echo -e "${BOLD}${GREEN}INSTALLATION COMPLETE!${NC}"
 echo -e "${GREEN}==========================================${NC}"
 echo ""
 echo -e "${YELLOW}⚠  Server is NOT started automatically.${NC}"
-echo -e "${YELLOW}   Start it with: ${BOLD}./Hytale-Server start${NC}"
+echo -e "${YELLOW}   Start it with: ${BOLD}$0 start${NC}"
 echo ""
 echo -e "${CYAN}${BOLD}NEXT STEPS:${NC}"
 echo ""
 echo -e "${BOLD}1)${NC} Start the server:"
-echo -e "   ${CYAN}./Hytale-Server start${NC}"
+echo -e "   ${CYAN}$0 start${NC}"
 echo ""
 echo -e "${BOLD}2)${NC} Attach to server console:"
-echo -e "   ${CYAN}./Hytale-Server console${NC}"
+echo -e "   ${CYAN}$0 console${NC}"
 echo -e "   ${YELLOW}(Detach: Ctrl+B then D)${NC}"
 echo ""
 echo -e "${BOLD}3)${NC} View server status:"
-echo -e "   ${CYAN}./Hytale-Server status${NC}"
+echo -e "   ${CYAN}$0 status${NC}"
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BOLD}${CYAN}SERVER DETAILS${NC}"
@@ -1146,22 +1153,22 @@ show_status() {
   echo ""
   
   # Check if installed
-  if ! systemctl list-unit-files | grep -q hytale.service; then
+  if [ ! -f "$BASE_DIR/start.sh" ]; then
     echo -e "${RED}Server: NOT INSTALLED${NC}"
     echo ""
-    echo -e "${YELLOW}Run './Hytale-Server install' to install the server.${NC}"
+    echo -e "${YELLOW}Run '$0 install' to install the server.${NC}"
     return
   fi
   
   # Server status
-  if systemctl is-active --quiet hytale 2>/dev/null; then
+  if is_server_running; then
     echo -e "${GREEN}Server Status: RUNNING ✓${NC}"
   else
     echo -e "${RED}Server Status: STOPPED ✗${NC}"
   fi
   
   # Auto-start on boot
-  if systemctl is-enabled --quiet hytale 2>/dev/null; then
+  if is_autostart_enabled; then
     echo -e "${GREEN}Auto-start: ENABLED ✓${NC}"
   else
     echo -e "${YELLOW}Auto-start: DISABLED ✗${NC}"
@@ -1218,7 +1225,7 @@ show_status() {
   fi
   
   # Auto-restart status
-  if crontab -l 2>/dev/null | grep -q "systemctl restart hytale"; then
+  if crontab -l 2>/dev/null | grep -q "restart hytale\|restart >"; then
     echo -e "${GREEN}Auto-restart: ENABLED ✓${NC}"
     
     # Extract hour and minute from RESTART_CRON
@@ -1368,61 +1375,48 @@ start_server() {
   echo ""
   echo -e "${CYAN}Starting Hytale server...${NC}"
   
-  if ! systemctl list-unit-files | grep -q hytale.service; then
+  if [ ! -f "$BASE_DIR/start.sh" ]; then
     echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
     echo -e "${YELLOW}Please install it first.${NC}"
     exit 1
   fi
   
-  if systemctl is-active --quiet hytale 2>/dev/null; then
+  if is_server_running; then
     echo -e "${YELLOW}Server is already running.${NC}"
     exit 0
   fi
   
-  systemctl start hytale
+  # Start server in background
+  "$BASE_DIR/start.sh" &
+  sleep 3
   
-  if systemctl is-active --quiet hytale; then
-    echo -e "${GREEN}Hytale server started successfully.${NC}"
-    echo ""
-    
-    # Check for skip auth option
-    SKIP_AUTH=${2:-false}
-    
-    # Only wait for authentication URL if auth.enc doesn't exist (first start) and not skipped
-    if [ ! -f "$BASE_DIR/auth.enc" ] && [ "$SKIP_AUTH" != "--skip-auth" ]; then
-      echo "Waiting for authentication URL..."
-      sleep 5
+  if is_server_running; then
+    # Wait for authentication URL if auth.enc doesn't exist
+    if [ ! -f "$BASE_DIR/auth.enc" ]; then
+      sleep 8
       
-      # Try to get auth URL from logs with configurable timeout
+      # Check for auth URL in logs
       if [ -d "$BASE_DIR/logs" ]; then
-        local attempts=$((AUTH_WAIT_TIMEOUT / 10))
-        for i in $(seq 1 $attempts); do
-          LATEST_LOG=$(ls -t "$BASE_DIR/logs"/*.log 2>/dev/null | head -1)
-          if [ -n "$LATEST_LOG" ]; then
-            AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
-            if [ -n "$AUTH_URL" ]; then
-              echo ""
-              echo "=========================================="
-              echo "AUTHENTICATION REQUIRED:"
-              echo "Visit: $AUTH_URL"
-              echo "=========================================="
-              echo ""
-              break
-            fi
+        LATEST_LOG=$(ls -t "$BASE_DIR/logs"/*.log 2>/dev/null | head -1)
+        if [ -n "$LATEST_LOG" ]; then
+          AUTH_URL=$(grep -oP 'https://oauth\.accounts\.hytale\.com/oauth2/device/verify\?user_code=[A-Za-z0-9]+' "$LATEST_LOG" 2>/dev/null | tail -1)
+          if [ -n "$AUTH_URL" ]; then
+            echo ""
+            echo "=========================================="
+            echo "🔐 AUTHENTICATION REQUIRED"
+            echo "🔗 Visit: $AUTH_URL"
+            echo "=========================================="
+            echo ""
           fi
-          sleep 10
-        done
-        
-        if [ -z "$AUTH_URL" ]; then
-          echo -e "${YELLOW}Authentication URL not found within ${AUTH_WAIT_TIMEOUT}s${NC}"
-          echo -e "${YELLOW}Check logs with: ./Hytale-Server logs${NC}"
         fi
       fi
     fi
     
-    echo "Attach to console: ./Hytale-Server console"
+    echo -e "${GREEN}Hytale server started successfully.${NC}"
+    echo -e "${BLUE}Attach to console: $0 console${NC}"
   else
     echo -e "${RED}Failed to start Hytale server.${NC}" >&2
+    echo -e "${YELLOW}Check logs with: $0 logs${NC}" >&2
     exit 1
   fi
 }
@@ -1433,20 +1427,20 @@ restart_server() {
   echo -e "${BOLD}${YELLOW}=== Restarting Hytale Server ===${NC}"
   echo ""
   
-  if ! systemctl list-unit-files | grep -q hytale.service; then
+  if [ ! -f "$BASE_DIR/start.sh" ]; then
     echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
     exit 1
   fi
   
   SERVER_WAS_RUNNING=false
-  if systemctl is-active --quiet hytale 2>/dev/null; then
+  if is_server_running; then
     SERVER_WAS_RUNNING=true
     echo -e "${CYAN}[1/2]${NC} Stopping server..."
-    systemctl stop hytale
+    tmux kill-session -t hytale-server 2>/dev/null || true
     
     # Wait for clean shutdown
     for i in {1..15}; do
-      if ! tmux has-session -t hytale-server 2>/dev/null; then
+      if ! is_server_running; then
         break
       fi
       sleep 1
@@ -1458,12 +1452,13 @@ restart_server() {
   fi
   
   echo -e "${CYAN}[2/2]${NC} Starting server..."
-  systemctl start hytale
+  "$BASE_DIR/start.sh" &
+  sleep 3
   
-  if systemctl is-active --quiet hytale; then
+  if is_server_running; then
     echo -e "${GREEN}✓ Server restarted successfully${NC}"
     echo ""
-    echo -e "${BLUE}Attach to console: ./Hytale-Server console${NC}"
+    echo -e "${BLUE}Attach to console: $0 console${NC}"
   else
     echo -e "${RED}Failed to restart server${NC}" >&2
     exit 1
@@ -1478,18 +1473,31 @@ stop_server() {
   echo ""
   echo -e "${CYAN}Stopping Hytale server...${NC}"
   
-  if ! systemctl list-unit-files | grep -q hytale.service; then
+  if [ ! -f "$BASE_DIR/start.sh" ]; then
     echo -e "${RED}ERROR: Hytale server is not installed.${NC}"
     exit 1
   fi
   
-  if ! systemctl is-active --quiet hytale 2>/dev/null; then
+  if ! is_server_running; then
     echo -e "${YELLOW}Server is not running.${NC}"
     exit 0
   fi
   
-  systemctl stop hytale
-  echo -e "${GREEN}Hytale server stopped.${NC}"
+  tmux kill-session -t hytale-server 2>/dev/null || true
+  
+  # Wait for clean shutdown
+  for i in {1..10}; do
+    if ! is_server_running; then
+      break
+    fi
+    sleep 1
+  done
+  
+  if ! is_server_running; then
+    echo -e "${GREEN}Hytale server stopped.${NC}"
+  else
+    echo -e "${YELLOW}Server may still be shutting down...${NC}"
+  fi
 }
 
 # Console attachment function
@@ -1497,13 +1505,13 @@ attach_console() {
   echo ""
   if ! tmux has-session -t hytale-server 2>/dev/null; then
     echo -e "${RED}Error: Hytale server console session not found.${NC}"
-    echo -e "${YELLOW}Is the server running? Check with: systemctl status hytale${NC}"
+    echo -e "${YELLOW}Is the server running? Check with: $0 status${NC}"
     exit 1
   fi
   
   echo -e "${CYAN}Attaching to Hytale server console...${NC}"
   echo -e "${YELLOW}Press Ctrl+B then D to detach${NC}"
-  sleep 5
+  sleep 2
   tmux attach -t hytale-server
 }
 
@@ -1643,6 +1651,246 @@ rotate_logs() {
   echo -e "${GREEN}===========================================${NC}"
 }
 
+# Mods management function
+manage_mods() {
+  local action=$1
+  local mod_name=$2
+  
+  # Ensure mods directory exists
+  mkdir -p "$MODS_DIR"
+  
+  case "$action" in
+    list)
+      echo ""
+      echo -e "${BOLD}${CYAN}=== Available Mods ===${NC}"
+      echo ""
+      
+      if [ ${#MOD_URLS[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No mods defined yet${NC}"
+        echo -e "${BLUE}Add mods to the MOD_URLS array in the script${NC}"
+        return
+      fi
+      
+      # List available mods
+      echo -e "${CYAN}Available for installation:${NC}"
+      local index=1
+      local -a mod_array=()
+      for mod in "${!MOD_URLS[@]}"; do
+        mod_array+=("$mod")
+      done
+      # Sort array
+      IFS=$'\n' mod_array=($(sort <<<"${mod_array[*]}"))
+      unset IFS
+      
+      for mod in "${mod_array[@]}"; do
+        if [ -f "$MODS_DIR/${mod}.jar" ]; then
+          echo -e "  ${BOLD}[$index]${NC} ${GREEN}✓${NC} ${BOLD}$mod${NC} ${YELLOW}(installed)${NC}"
+        else
+          echo -e "  ${BOLD}[$index]${NC} ${BLUE}○${NC} ${BOLD}$mod${NC}"
+        fi
+        ((index++))
+      done
+      
+      # List installed mods not in the list
+      echo ""
+      echo -e "${CYAN}Installed mods:${NC}"
+      if [ -d "$MODS_DIR" ] && [ "$(ls -A "$MODS_DIR"/*.jar 2>/dev/null)" ]; then
+        for jar in "$MODS_DIR"/*.jar; do
+          jar_name=$(basename "$jar")
+          jar_size=$(du -h "$jar" | cut -f1)
+          echo -e "  ${GREEN}•${NC} $jar_name ${BLUE}($jar_size)${NC}"
+        done
+      else
+        echo -e "  ${YELLOW}No mods installed${NC}"
+      fi
+      
+      echo ""
+      echo -e "${GREEN}===========================================${NC}"
+      ;;
+      
+    install)
+      if [ -z "$mod_name" ]; then
+        echo -e "${RED}Error: Mod name or number required${NC}"
+        echo -e "${YELLOW}Usage: $0 mods install <mod-name|number>${NC}"
+        echo ""
+        echo -e "${CYAN}Available mods:${NC}"
+        local index=1
+        local -a mod_array=()
+        for mod in "${!MOD_URLS[@]}"; do
+          mod_array+=("$mod")
+        done
+        IFS=$'\n' mod_array=($(sort <<<"${mod_array[*]}"))
+        unset IFS
+        for mod in "${mod_array[@]}"; do
+          echo -e "  ${BOLD}[$index]${NC} $mod"
+          ((index++))
+        done
+        exit 1
+      fi
+      
+      # Check if input is a number
+      if [[ "$mod_name" =~ ^[0-9]+$ ]]; then
+        # Input is a number, get mod name by index
+        local -a mod_array=()
+        for mod in "${!MOD_URLS[@]}"; do
+          mod_array+=("$mod")
+        done
+        IFS=$'\n' mod_array=($(sort <<<"${mod_array[*]}"))
+        unset IFS
+        
+        local index=$((mod_name - 1))
+        if [ $index -lt 0 ] || [ $index -ge ${#mod_array[@]} ]; then
+          echo -e "${RED}Error: Invalid mod number '$mod_name'${NC}"
+          echo -e "${YELLOW}Please choose a number between 1 and ${#mod_array[@]}${NC}"
+          exit 1
+        fi
+        mod_name="${mod_array[$index]}"
+      fi
+      
+      # Check if mod exists in list
+      if [ -z "${MOD_URLS[$mod_name]}" ]; then
+        echo -e "${RED}Error: Mod '$mod_name' not found${NC}"
+        echo ""
+        echo -e "${CYAN}Available mods:${NC}"
+        local index=1
+        local -a mod_array=()
+        for mod in "${!MOD_URLS[@]}"; do
+          mod_array+=("$mod")
+        done
+        IFS=$'\n' mod_array=($(sort <<<"${mod_array[*]}"))
+        unset IFS
+        for mod in "${mod_array[@]}"; do
+          echo -e "  ${BOLD}[$index]${NC} $mod"
+          ((index++))
+        done
+        exit 1
+      fi
+      
+      # Check if already installed
+      if [ -f "$MODS_DIR/${mod_name}.jar" ]; then
+        echo -e "${YELLOW}Mod '$mod_name' is already installed${NC}"
+        read -p "Reinstall? (yes/no): " REINSTALL
+        if [ "$REINSTALL" != "yes" ]; then
+          echo -e "${YELLOW}Installation cancelled${NC}"
+          exit 0
+        fi
+      fi
+      
+      echo ""
+      echo -e "${BOLD}${CYAN}=== Installing Mod: $mod_name ===${NC}"
+      echo ""
+      
+      echo -e "${CYAN}[1/3]${NC} Preparing installation..."
+      # Download mod
+      MOD_URL="${MOD_URLS[$mod_name]}"
+      MOD_FILE="${mod_name}.jar"
+      MOD_PATH="$MODS_DIR/$MOD_FILE"
+      
+      echo -e "${CYAN}[2/3]${NC} Downloading mod..."
+      echo -e "${BLUE}Source: $MOD_URL${NC}"
+      
+      if curl -L "$MOD_URL" -o "$MOD_PATH" --progress-bar; then
+        echo -e "${CYAN}[3/3]${NC} Verifying installation..."
+        # Verify download
+        if [ -f "$MOD_PATH" ] && [ -s "$MOD_PATH" ]; then
+          MOD_SIZE=$(du -h "$MOD_PATH" | cut -f1)
+          echo ""
+          echo -e "${GREEN}==========================================${NC}"
+          echo -e "${GREEN}✓ Mod installed successfully!${NC}"
+          echo -e "${BLUE}Location: $MOD_PATH${NC}"
+          echo -e "${BLUE}Size: $MOD_SIZE${NC}"
+          echo -e "${GREEN}==========================================${NC}"
+          echo ""
+          echo -e "${YELLOW}Restart server for changes to take effect${NC}"
+        else
+          echo -e "${RED}Downloaded file is empty or invalid${NC}"
+          rm -f "$MOD_PATH"
+          exit 1
+        fi
+      else
+        echo -e "${RED}Failed to download mod${NC}"
+        rm -f "$MOD_PATH"
+        exit 1
+      fi
+      ;;
+      
+    uninstall)
+      if [ -z "$mod_name" ]; then
+        echo -e "${RED}Error: Mod name or number required${NC}"
+        echo -e "${YELLOW}Usage: $0 mods uninstall <mod-name|number>${NC}"
+        exit 1
+      fi
+      
+      # Check if input is a number
+      if [[ "$mod_name" =~ ^[0-9]+$ ]]; then
+        # Input is a number, get mod name by index
+        local -a mod_array=()
+        for mod in "${!MOD_URLS[@]}"; do
+          mod_array+=("$mod")
+        done
+        IFS=$'\n' mod_array=($(sort <<<"${mod_array[*]}"))
+        unset IFS
+        
+        local index=$((mod_name - 1))
+        if [ $index -lt 0 ] || [ $index -ge ${#mod_array[@]} ]; then
+          echo -e "${RED}Error: Invalid mod number '$mod_name'${NC}"
+          echo -e "${YELLOW}Please choose a number between 1 and ${#mod_array[@]}${NC}"
+          exit 1
+        fi
+        mod_name="${mod_array[$index]}"
+      fi
+      
+      # Set mod filename
+      MOD_FILE="${mod_name}.jar"
+      MOD_PATH="$MODS_DIR/$MOD_FILE"
+      
+      if [ ! -f "$MOD_PATH" ]; then
+        echo -e "${RED}Error: Mod '$mod_name' is not installed${NC}"
+        echo ""
+        echo -e "${CYAN}Installed mods:${NC}"
+        if [ -d "$MODS_DIR" ] && [ "$(ls -A "$MODS_DIR"/*.jar 2>/dev/null)" ]; then
+          for jar in "$MODS_DIR"/*.jar; do
+            echo -e "  - $(basename "$jar" .jar)"
+          done
+        else
+          echo -e "  ${YELLOW}No mods installed${NC}"
+        fi
+        exit 1
+      fi
+      
+      echo ""
+      echo -e "${BOLD}${YELLOW}=== Uninstalling Mod: $mod_name ===${NC}"
+      echo ""
+      
+      echo -e "${CYAN}[1/2]${NC} Confirming uninstallation..."
+      read -p "Are you sure? (yes/no): " CONFIRM
+      
+      if [ "$CONFIRM" = "yes" ]; then
+        echo -e "${CYAN}[2/2]${NC} Removing mod..."
+        rm -f "$MOD_PATH"
+        echo ""
+        echo -e "${GREEN}==========================================${NC}"
+        echo -e "${GREEN}✓ Mod uninstalled successfully!${NC}"
+        echo -e "${GREEN}==========================================${NC}"
+        echo ""
+        echo -e "${YELLOW}Restart server for changes to take effect${NC}"
+      else
+        echo -e "${YELLOW}Uninstall cancelled${NC}"
+      fi
+      ;;
+      
+    *)
+      echo -e "${RED}Error: Invalid action '$action'${NC}"
+      echo ""
+      echo -e "${YELLOW}Usage:${NC}"
+      echo -e "  $0 mods list                    - List available and installed mods"
+      echo -e "  $0 mods install <mod-name>      - Install a mod"
+      echo -e "  $0 mods uninstall <mod-name>    - Uninstall a mod"
+      exit 1
+      ;;
+  esac
+}
+
 # Show usage information
 show_usage() {
   echo -e "${CYAN}Hytale Dedicated Server Manager${NC}"
@@ -1666,6 +1914,11 @@ show_usage() {
   echo "  config       - Edit server configuration"
   echo "  autobackup   - Toggle automatic backups"
   echo "  autorestart  - Toggle automatic restarts"
+  echo ""
+  echo "Mods Management:"
+  echo "  mods list                - List available and installed mods"
+  echo "  mods install <name>      - Install a mod"
+  echo "  mods uninstall <name>    - Uninstall a mod"
   echo ""
   echo "Run without arguments to show this help."
 }
@@ -1716,6 +1969,9 @@ else
       ;;
     autorestart)
       toggle_autorestart
+      ;;
+    mods)
+      manage_mods "$2" "$3"
       ;;
     status)
       show_status

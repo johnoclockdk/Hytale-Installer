@@ -34,11 +34,19 @@ MODS_DIR="$BASE_DIR/mods"
 # Define available mods with their download URLs
 # Mod filenames will be automatically set to <mod-name>.jar
 declare -A MOD_URLS=(
-  ["BetterMap"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
-  ["EyeSpy"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
-  ["Ymmersive_Melodies"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
-  ["Miners_Helmet"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
-  ["Simple_Claims"]="https://www.curseforge.com/api/v1/mods/1430352/files/7501446/download"
+  ["BetterMap"]="https://www.curseforge.com/api/v1/mods/1430352/files/7517397/download"
+  ["EyeSpy"]="https://www.curseforge.com/api/v1/mods/1423494/files/7491939/download"
+  ["Ymmersive_Melodies"]="https://www.curseforge.com/api/v1/mods/1400306/files/7502616/download"
+  ["Miners_Helmet"]="https://www.curseforge.com/api/v1/mods/1419622/files/7411645/download"
+  ["Simple_Claims"]="https://www.curseforge.com/api/v1/mods/1405415/files/7518979/download"
+  ["MultipleHUD"]="https://www.curseforge.com/api/v1/mods/1423634/files/7530266/download"
+  ["Party_Info_and_Pings"]="https://www.curseforge.com/api/v1/mods/1429469/files/7526614/download"
+)
+
+# Define mod dependencies (format: ["ModName"]="Dependency1 Dependency2")
+# Example: ["MyMod"]="RequiredLib AnotherLib"
+declare -A MOD_DEPENDENCIES=(
+  ["Party_Info_and_Pings"]="MultipleHUD"
 )
 # =========================================
 
@@ -255,6 +263,109 @@ create_backup_archive() {
 }
 
 # ================================================================
+
+# Install a single mod without dependency checking (internal use)
+install_mod_internal() {
+  local mod_name=$1
+  local is_dependency=${2:-false}
+  local MOD_URL="${MOD_URLS[$mod_name]}"
+  local MOD_FILE="${mod_name}.jar"
+  local MOD_PATH="$MODS_DIR/$MOD_FILE"
+  
+  # Check if already installed
+  if [ -f "$MOD_PATH" ]; then
+    if [ "$is_dependency" = true ]; then
+      echo -e "${GREEN}✓ Dependency '$mod_name' already installed${NC}"
+      return 0
+    fi
+  fi
+  
+  if [ "$is_dependency" = true ]; then
+    echo -e "${CYAN}  → Installing dependency: $mod_name${NC}"
+  else
+    echo -e "${CYAN}[2/3]${NC} Downloading mod..."
+  fi
+  echo -e "${BLUE}Source: $MOD_URL${NC}"
+  
+  if curl -L "$MOD_URL" -o "$MOD_PATH" --progress-bar; then
+    if [ -f "$MOD_PATH" ] && [ -s "$MOD_PATH" ]; then
+      local MOD_SIZE=$(du -h "$MOD_PATH" | cut -f1)
+      if [ "$is_dependency" = true ]; then
+        echo -e "${GREEN}  ✓ Dependency '$mod_name' installed ($MOD_SIZE)${NC}"
+      else
+        echo -e "${GREEN}✓ Mod downloaded successfully ($MOD_SIZE)${NC}"
+      fi
+      return 0
+    else
+      echo -e "${RED}Downloaded file is empty or invalid${NC}"
+      rm -f "$MOD_PATH"
+      return 1
+    fi
+  else
+    echo -e "${RED}Failed to download mod${NC}"
+    rm -f "$MOD_PATH"
+    return 1
+  fi
+}
+
+# Install mod with automatic dependency resolution
+install_mod_with_dependencies() {
+  local mod_name=$1
+  local indent=${2:-""}
+  declare -g -A INSTALLING_MODS  # Track mods currently being installed to prevent circular deps
+  
+  # Check for circular dependencies
+  if [ "${INSTALLING_MODS[$mod_name]}" = "1" ]; then
+    echo -e "${RED}Error: Circular dependency detected for '$mod_name'${NC}"
+    return 1
+  fi
+  
+  # Mark this mod as being installed
+  INSTALLING_MODS[$mod_name]=1
+  
+  # Check if mod has dependencies
+  local deps="${MOD_DEPENDENCIES[$mod_name]}"
+  
+  if [ -n "$deps" ]; then
+    echo -e "${YELLOW}${indent}→ Mod '$mod_name' requires dependencies${NC}"
+    
+    # Install each dependency
+    for dep in $deps; do
+      # Check if dependency exists in MOD_URLS
+      if [ -z "${MOD_URLS[$dep]}" ]; then
+        echo -e "${RED}Error: Dependency '$dep' not found in available mods${NC}"
+        echo -e "${YELLOW}Please add '$dep' to MOD_URLS array${NC}"
+        unset INSTALLING_MODS[$mod_name]
+        return 1
+      fi
+      
+      # Check if dependency is already installed
+      if [ ! -f "$MODS_DIR/${dep}.jar" ]; then
+        echo -e "${CYAN}${indent}  Installing dependency: $dep${NC}"
+        # Recursively install dependency (and its dependencies)
+        if ! install_mod_with_dependencies "$dep" "${indent}  "; then
+          echo -e "${RED}Failed to install dependency '$dep'${NC}"
+          unset INSTALLING_MODS[$mod_name]
+          return 1
+        fi
+      else
+        echo -e "${GREEN}${indent}  ✓ Dependency '$dep' already installed${NC}"
+      fi
+    done
+    
+    echo -e "${GREEN}${indent}✓ All dependencies for '$mod_name' satisfied${NC}"
+  fi
+  
+  # Install the mod itself
+  if ! install_mod_internal "$mod_name" false; then
+    unset INSTALLING_MODS[$mod_name]
+    return 1
+  fi
+  
+  # Unmark this mod
+  unset INSTALLING_MODS[$mod_name]
+  return 0
+}
 
 uninstall_server() {
   echo ""
@@ -1683,10 +1794,16 @@ manage_mods() {
       unset IFS
       
       for mod in "${mod_array[@]}"; do
+        local deps="${MOD_DEPENDENCIES[$mod]}"
+        local dep_info=""
+        if [ -n "$deps" ]; then
+          dep_info=" ${BLUE}[requires: $deps]${NC}"
+        fi
+        
         if [ -f "$MODS_DIR/${mod}.jar" ]; then
-          echo -e "  ${BOLD}[$index]${NC} ${GREEN}✓${NC} ${BOLD}$mod${NC} ${YELLOW}(installed)${NC}"
+          echo -e "  ${BOLD}[$index]${NC} ${GREEN}✓${NC} ${BOLD}$mod${NC} ${YELLOW}(installed)${NC}${dep_info}"
         else
-          echo -e "  ${BOLD}[$index]${NC} ${BLUE}○${NC} ${BOLD}$mod${NC}"
+          echo -e "  ${BOLD}[$index]${NC} ${BLUE}○${NC} ${BOLD}$mod${NC}${dep_info}"
         fi
         ((index++))
       done
@@ -1781,35 +1898,42 @@ manage_mods() {
       echo ""
       
       echo -e "${CYAN}[1/3]${NC} Preparing installation..."
-      # Download mod
-      MOD_URL="${MOD_URLS[$mod_name]}"
-      MOD_FILE="${mod_name}.jar"
-      MOD_PATH="$MODS_DIR/$MOD_FILE"
       
-      echo -e "${CYAN}[2/3]${NC} Downloading mod..."
-      echo -e "${BLUE}Source: $MOD_URL${NC}"
-      
-      if curl -L "$MOD_URL" -o "$MOD_PATH" --progress-bar; then
-        echo -e "${CYAN}[3/3]${NC} Verifying installation..."
-        # Verify download
-        if [ -f "$MOD_PATH" ] && [ -s "$MOD_PATH" ]; then
-          MOD_SIZE=$(du -h "$MOD_PATH" | cut -f1)
-          echo ""
-          echo -e "${GREEN}==========================================${NC}"
-          echo -e "${GREEN}✓ Mod installed successfully!${NC}"
-          echo -e "${BLUE}Location: $MOD_PATH${NC}"
-          echo -e "${BLUE}Size: $MOD_SIZE${NC}"
-          echo -e "${GREEN}==========================================${NC}"
-          echo ""
-          echo -e "${YELLOW}Restart server for changes to take effect${NC}"
-        else
-          echo -e "${RED}Downloaded file is empty or invalid${NC}"
-          rm -f "$MOD_PATH"
+      # Check for dependencies and install if needed
+      local deps="${MOD_DEPENDENCIES[$mod_name]}"
+      if [ -n "$deps" ]; then
+        echo -e "${CYAN}[2/3]${NC} Resolving and installing dependencies..."
+        if ! install_mod_with_dependencies "$mod_name"; then
+          echo -e "${RED}Failed to install mod and its dependencies${NC}"
           exit 1
         fi
       else
-        echo -e "${RED}Failed to download mod${NC}"
-        rm -f "$MOD_PATH"
+        echo -e "${CYAN}[2/3]${NC} Downloading mod (no dependencies)..."
+        if ! install_mod_internal "$mod_name" false; then
+          exit 1
+        fi
+      fi
+      
+      echo -e "${CYAN}[3/3]${NC} Verifying installation..."
+      MOD_PATH="$MODS_DIR/${mod_name}.jar"
+      if [ -f "$MOD_PATH" ] && [ -s "$MOD_PATH" ]; then
+        MOD_SIZE=$(du -h "$MOD_PATH" | cut -f1)
+        echo ""
+        echo -e "${GREEN}==========================================${NC}"
+        echo -e "${GREEN}✓ Mod installed successfully!${NC}"
+        echo -e "${BLUE}Location: $MOD_PATH${NC}"
+        echo -e "${BLUE}Size: $MOD_SIZE${NC}"
+        
+        # Show installed dependencies
+        if [ -n "$deps" ]; then
+          echo -e "${BLUE}Dependencies: $deps${NC}"
+        fi
+        
+        echo -e "${GREEN}==========================================${NC}"
+        echo ""
+        echo -e "${YELLOW}Restart server for changes to take effect${NC}"
+      else
+        echo -e "${RED}Installation verification failed${NC}"
         exit 1
       fi
       ;;

@@ -948,7 +948,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
   
   for dep in "${MISSING_DEPS[@]}"; do
     echo -e "${BLUE}Installing $dep...${NC}"
-    apt-get install -y "$dep"
+    sudo apt-get install -y "$dep"
     echo -e "${GREEN}✓ $dep installed${NC}"
   done
   

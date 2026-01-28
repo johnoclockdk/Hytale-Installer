@@ -973,7 +973,7 @@ else
   JAVA_URL="https://download.oracle.com/java/25/latest/$JAVA_DEB"
   
   if download_file "$JAVA_URL" "$JAVA_DEB" "Java 25 JDK"; then
-    if dpkg -i "$JAVA_DEB"; then
+    if sudo dpkg -i "$JAVA_DEB"; then
       echo -e "${GREEN}✓ Java 25 installed successfully.${NC}"
       rm "$JAVA_DEB"
     else
